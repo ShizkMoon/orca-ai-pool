@@ -1,6 +1,6 @@
 # 生产部署指引（新加坡服务器）
 
-> 目标机：`root@43.160.254.193`（Debian 13，Docker 26.1.5 + Compose 2.26.1 已装好，镜像已预拉）
+> 目标机：`root@<YOUR_SERVER_IP>`（Debian 13，Docker 26.1.5 + Compose 2.26.1 已装好，镜像已预拉）
 > 部署路径：`/opt/orca-ai-pool/`
 
 ---
@@ -15,7 +15,7 @@ cp .env.example .env && vim .env
 
 | 变量 | 填什么 | 生成方法 |
 |---|---|---|
-| `GATEWAY_HOST` | 服务器公网 IP | `43.160.254.193` |
+| `GATEWAY_HOST` | 服务器公网 IP | `<YOUR_SERVER_IP>` |
 | `GATEWAY_PORT` | 对外端口 | `8317` |
 | `MASTER_API_KEY` | 客户端访问 CPA 的主 Key | `openssl rand -hex 32` |
 | `CPA_ADMIN_SECRET` | CPAMC 管理面板/管理 API 密码 | `openssl rand -hex 24` |
@@ -99,7 +99,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18317/v1/models
 - **CPAMC 管理面板**：`http://<服务器IP>:8317/management.html`，密码 = `CPA_ADMIN_SECRET`
 - **Go 多账号余量**：CPAMC 配额管理页的 `opencode-go-pool.json` 凭据卡片（只给一行聚合，
   单 key 明细请直接看 `opencode-go-N.json` 凭据）
-- **opencode2api WebUI**：`http://127.0.0.1:18081`（只绑回环，需 SSH 转发：`ssh -L 18081:127.0.0.1:18081 root@43.160.254.193`），账号 `admin` / `OC2API_WEBUI_PASSWORD`
+- **opencode2api WebUI**：`http://127.0.0.1:18081`（只绑回环，需 SSH 转发：`ssh -L 18081:127.0.0.1:18081 root@<YOUR_SERVER_IP>`），账号 `admin` / `OC2API_WEBUI_PASSWORD`
 
 ## 常用运维命令
 
