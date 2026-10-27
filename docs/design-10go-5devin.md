@@ -6,6 +6,8 @@
 > **v2 补章（§12）**：生产环境暂无静态代理、10 个 Go 全走支付宝、5 个 Devin 全走同一张汇丰香港万事达卡。约束变了，§12 重算了风险模型与出口方案，§6/§9 的相关条目以 §12 为准。
 >
 > **v3 现状修正（§13）**：实际只上线 **4 个 Go**（3 个同源 + 1 个第三方），**Devin 尚未上线**；服务器确有全局 IPv6 `/64`。§13 把排期倒过来——**先铺出口，再扩号，Devin 最后上**。§12 里关于 10 个号的假设以 §13 为准。
+>
+> **v4 归因更正（§14）**：§13 对"4 key 只见 3"的解释（插件不响应配置变更）**被源码证伪**——配置确实推送，只是静默无日志。§14 给出真因、两个已上线改动（逐 key 展开、render 漂移检测）与上游 PR #7050。
 
 ---
 
@@ -508,6 +510,66 @@ opencode_go_pool:
 
 1. **给 Devin 留不同的地址族**：Go 走 IPv6 `::101~104`，Devin 走服务器原生 IPv4。不同地址族在风控侧是不同桶，等于白拿一份隔离。
 2. **别把 Devin 的登录和扩号挤在同一天**：OAuth 首次登录会留设备/网络指纹，同 IP 同一天连登 5 个 Devin 账号是典型批量特征。
+
+
+---
+
+## 14. v4：插件可观测性与"3 key 假象"的最终归因
+
+§13 里我判断"4 个 key 只有 3 个生效"，给出的解释是 **CPA 的 C ABI 插件不响应配置变更**。这条结论**已被源码证伪**，记录下来免得以后重复踩。
+
+### 14.1 真相：配置会被推送，但推送不可观测
+
+把上游 v8.0.43 到 main 的插件链路逐段读完，事实是：
+
+| 环节 | 位置 | 行为 |
+| --- | --- | --- |
+| 配置写入 → 运行时刷新 | `internal/watcher/config_reload.go:157` → `sdk/cliproxy/service_config.go:215` | 文件变更经 fsnotify 重载后，**会**走 `syncPluginRuntimeConfigForConfig` → `host.ApplyConfig` |
+| 已加载插件重注册 | `internal/pluginhost/host.go:365-374` | `registeredNow=false` 时调 `callRegister` |
+| 方法选择 | `internal/pluginhost/host.go:1116-1122` | 已注册 → `pluginabi.MethodPluginReconfigure`，`ConfigYAML` 随包下发 |
+
+所以配置**确实**推给了运行中的 `.so`。真正的坑是**没有任何日志**：只有首次加载会打 `pluginhost: plugin loaded` / `plugin registered`，之后的 `reconfigure` 是一条静默 RPC。插件要么重读、要么忽略，从日志上完全看不出区别——这才是"面板显示 3 个 key"能存在 10 小时不被发现的原因。
+
+> 教训：`plugin.reconfigure` 存在 ≠ 它被调用 ≠ 插件处理了它。三者只能靠日志区分。
+
+### 14.2 已落地的两个改动
+
+**① 配额插件按 key 展开**（`plugin/opencode-go-quota/main.go`）
+
+- 聚合视图以前只在 `singleKey` 时追加逐 key 分组，池视图只剩一行"所有 key 综合"——**均值会掩盖饿死的那个号**（9 健康 + 1 耗尽 = 90%，看着很安全）。
+- 现在每个 key 恒有一行，行标题带该 key 最紧的窗口与重置时间；综合行标题追加"最紧 <key> <窗口> <百分比>"。
+- 顺带修掉一个真 bug：`agg` 表的键是 `rolling/weekly/monthly`，而消费端按 `5h/weekly/monthly` 取，**5h 那一路一直取到零值**，综合行的 5h 均值从未真实生效过。
+- 约束：host 端 `QuotaMetric.Value` 是 `float64`，任何字符串型 summary 指标都会让整个响应解码失败（`json: cannot unmarshal string into ... value of type float64`）。归因只能放在 `displayName`。
+
+线上验收（2026-10-27 15:25 UTC，空窗重启后）：
+
+```
+Accounts 4 | Failing 0 | Min remaining 67%
+oc_s…VCdF · 周 97%     5h 99  weekly 97  monthly 99
+oc_s…kXkc · 周 99%     5h 100 weekly 99  monthly 100
+oc_s…ZiCs · 周 99%     5h 100 weekly 99  monthly 100
+oc_s…0vd8 · 月 67%     5h 100 weekly 97  monthly 67   <- 一直吃紧的就是这个号
+所有 key 综合 · 最紧 oc_s…0vd8 月 67% · reset 2026-11-18T08:28:50Z
+```
+
+即 `min_remaining 67%` 不是一个孤立数字，而是第四个号被月度额度卡住；另外三个的月度都在 99~100%。
+
+**② `poolctl render` 检测插件配置漂移**（`scripts/poolctl.py`）
+
+- 每次 render 后把 `plugins.configs` 里受管插件配置的哈希与"当前进程启动时间"一起写进 `.poolctl-plugin-state.json`。
+- 下次 render 时若**同一进程**（启动时间未变）却出现了不同的插件配置，就告警"配置已变更但进程未重载"，并提示 `docker compose restart cliproxyapi`。
+- 两个条件缺一不可：只看哈希会在"停机期间写过配置、随后启动"时误报；只看启动时间则根本抓不到。报警时不回写状态，所以重启前每次 render 都会继续提醒。
+- CPA 没跑时（纯本地仓库）不告警，只记账。8 种场景（首跑/未变/新增 key/重复提醒/重启后/停机写/重启加载/再次新增）已逐一验证。
+
+### 14.3 上游 PR
+
+- [router-for-me/CLIProxyAPI#7050](https://github.com/router-for-me/CLIProxyAPI/pull/7050)：给 `plugin.reconfigure` 补一条 `pluginhost: plugin reconfigured` 日志（`internal/pluginhost/host.go`）。一行日志，行为零变化，把"静默 RPC"变成可观测事实。PR 正文写清了上面的归因链条。
+
+### 14.4 仍未闭环
+
+1. **逐 key 行是否在面板上真的展示**：本机 `/v1/models` 只返回 1 个模型，无法据此判断 WebUI 对多 group 的渲染策略；管理接口原始响应已确认 5 个 group 都在，展示层待实际登录面板核对。
+2. **CPA 版本落后一档**：线上跑 `v8.0.43`，上游已发 `v8.0.44`。§13 的重启流程可复用，升级前先确认 44 版没有插件 ABI 变更。
+3. **`management.secret-key = sk-123456` 仍未轮换**，且 8317 直接暴露公网（§12 已列为 P0）。
 
 ---
 
