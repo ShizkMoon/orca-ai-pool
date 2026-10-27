@@ -567,7 +567,7 @@ Accounts 4 | Failing 0 | Min remaining 67%
 - 仓库上游是 [AzureLandin/orca-ai-pool](https://github.com/AzureLandin/orca-ai-pool)（分支 `master`，本人只有 READ 权限），本地 `upstream` remote 指向它，`origin` 是自己的 fork。
 - PR：[AzureLandin/orca-ai-pool#3](https://github.com/AzureLandin/orca-ai-pool/pull/3) —— 只带 `scripts/poolctl.py` 的漂移检测（§14.3）与一行 `.gitignore`，基于上游 `master` 单提交，不夹带本分支那 1300+ 行设计文档。
 - 理由：插件配置写盘后是否需要重启 CPA，是只有 render 一侧才知道的事实；让 render 直接告警，比事后翻日志找"为什么面板少了 key"便宜得多。
-- 关于 CPA：曾误开过一条给 CLIProxyAPI 的 PR（补 `plugin.reconfigure` 的日志），已按"上游指本仓库"的口径**关闭**；其中关于"推送静默"的观察保留在 §14.1。
+- 关于 CPA：按仓库贡献指南（README「Contributing」5 条）重开了一条 [router-for-me/CLIProxyAPI#7052](https://github.com/router-for-me/CLIProxyAPI/pull/7052)。前一条 #7050 是流程事故——分支名用了 `plugin/reconfigure-log` 而不是指南给的 `feature/<name>`、PR 目标选了 `main`（上游会把 \`main\` 的 PR 自动改到 `dev`，但基线仍应从 `dev` 切），已关闭。现在的做法：从 `dev` 切 `feature/pluginhost-reconfigure-log`，`cherry-pick -x` 保留原提交，PR 直接对 `dev`。
 
 ### 14.5 仍未闭环
 
