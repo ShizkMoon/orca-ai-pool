@@ -77,7 +77,7 @@ cd plugin/opencode-go-quota && make install && cd ../..
 docker compose up -d
 
 # 5. 验证（30 秒后）
-docker compose ps      # 三个服务：ingress / cliproxyapi / opencode2api
+docker compose ps      # 两个容器：cliproxyapi / opencode2api（nginx 装在宿主机上）
 curl -s http://127.0.0.1:8317/v1/models \
   -H "Authorization: Bearer <MASTER_API_KEY>" | python3 -m json.tool | head -30
 # 绕过入口直连 CPA，用于区分「入口问题」和「CPA 问题」
@@ -88,14 +88,17 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18317/v1/models
 
 ## 第四步：面板访问
 
-> 8317 现在是 **nginx 入口**：管理口仍按设计对公网开放，但只在管理面上限速
-> （`/v0/management/*` 与 `/management*` 共用 10 r/min + burst 5，见 README 3.10）；
-> **模型调用 `/v1/*` 不限速、不限并发**。排障时可走 `127.0.0.1:18317` 绕开入口。只想给客户端用、不想暴露管理口时，
-> 在入口上加 `location /v0/ { deny all; }` 或回退到无 override 的形态。
+> 8317 现在是 **nginx 入口**（`nginx/conf.d/orca.conf`，由 `poolctl render` 生成并拷到
+> `/etc/nginx/conf.d/`；公共代理片段在 `/etc/nginx/snippets/orca-proxy.conf`）。
+> **只有管理面限流**：`/management.html`、`/assets/*`（burst 100）、`/v0/management/*`、
+> `/v8/management/*`（burst 30），稳态 5 r/s per IP；插件配额端点单独 12 r/m（burst 5）。
+> **模型面 `/v1/*` 不限速、不限并发**——SSE 长流和并行子 agent 会自己放大瞬时并发，
+> 给模型面设桶最先打到的就是最该重试的请求。排障时走 `127.0.0.1:18317` 绕开入口。
 
 
 - **CPAMC 管理面板**：`http://<服务器IP>:8317/management.html`，密码 = `CPA_ADMIN_SECRET`
-- **Go 多账号余量**：CPAMC 配额管理页的 `opencode-go-pool.json` 凭据卡片（综合三行 + 逐 key 分组）
+- **Go 多账号余量**：CPAMC 配额管理页的 `opencode-go-pool.json` 凭据卡片（只给一行聚合，
+  单 key 明细请直接看 `opencode-go-N.json` 凭据）
 - **opencode2api WebUI**：`http://127.0.0.1:18081`（只绑回环，需 SSH 转发：`ssh -L 18081:127.0.0.1:18081 root@43.160.254.193`），账号 `admin` / `OC2API_WEBUI_PASSWORD`
 
 ## 常用运维命令
@@ -115,4 +118,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18317/v1/models
 - **8317 是唯一该放行的端口**，现在是 nginx 入口（仅管理面限速 + 429 JSON，`/v1` 纯透传）。
 - `18317` 是 CPA 的宿主机回环端口（`127.0.0.1`），只用于排障，绝不要对公网开放。
 - `18081` 已绑定 `127.0.0.1`，外部访问必须走 SSH 隧道；`8080` 未发布到宿主机。
-- 回滚到「CPA 直接对外」：`mv docker-compose.override.yml{,.disabled} && docker compose up -d`。
+- 回滚到「CPA 直接对外」：把 `docker-compose.yml` 的端口改回 `"8317:8317"`、
+  `poolctl render` 前把 `GATEWAY_INTERNAL_PORT` 设成 8317（或直接改 `cliproxy/config.yaml` 的
+  `server.port`），然后 `systemctl stop nginx && docker compose up -d cliproxyapi`。
+  注意回滚后管理面**失去限流**，只剩 CPA 自己的「5 次失败封 IP 30 分钟」。

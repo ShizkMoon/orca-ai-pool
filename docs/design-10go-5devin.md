@@ -573,10 +573,11 @@ Accounts 4 | Failing 0 | Min remaining 67%
 
 1. **CPA 版本已对齐**：线上从 `v8.0.43` 升到 `v8.0.44`（commit `1f917e7`），插件 `.so` 在新版正常加载并注册，无 ABI 变更。
 2. **弱密钥已轮换**：`CPA_ADMIN_SECRET` 与 `OC2API_WEBUI_PASSWORD` 从 9/10 位默认值换成 192 bit（`poolctl rotate-secret`），旧 `sk-123456` 现在返回 401。
-3. **入口层已就位**：nginx 1.26 终止 TLS（自签，825 天），管理面 `limit_req` 3r/s、插件配额 12r/m，`/v1/models` 走 `proxy_cache` + `proxy_cache_lock`。实测 20 次连发 14×200 + 6×429，2s 后恢复 200。
+3. **入口层已就位，且 8317 已收归 nginx**：nginx 1.26 同时监听公网 8317（HTTP，面板地址不变）与 443（TLS 自签 825 天），CPA 退到 `127.0.0.1:18317`（compose 只做回环映射）。管理面 `limit_req` 5r/s、burst 30（`/assets/*` burst 100，避免面板刷资源就 429），插件配额 12r/m，`/v1/models` 走 `proxy_cache` + `proxy_cache_lock`。
+   **模型面零限流**：并发 60 打 `/v1/models` 全 200，并发 40 打 chat 全 401（只被鉴权拦，无 429）；对照管理 API 并发 60 得 33×200 + 27×429。
 4. **亲和性已修正**：`session-affinity-subagents` 由 `false` 改为 `true`（原来显式覆盖了 CPA 默认值），并补 `session-affinity-rebind-on: quota`。
 5. **配额轮询已减负**：插件 `refresh_seconds` 60 → 300（天级请求量 5760 → 1152）；`first_event_timeout_seconds` 0 → 90。
-6. **仍未闭环：8317 仍直连公网**（用户明确要求保留，手工管理）。这意味着 nginx 的限流只管 443；从 8317 进来的管理请求不受 `limit_req` 约束。要真正收口得一并关掉 8317 的公网绑定。
+6. **8317 仍对公网开放**（用户要求保留，手工管理），但现在它是 nginx 的端口而非 CPA 的：管理面在 8317 上同样受限流约束。唯一的旁路是 `127.0.0.1:18317`，只能本机访问。回滚方式见 DEPLOY.md 防火墙提醒。
 7. **聚合均值的"预警阈值"还没定**：现在只报 `min_remaining`，没有"综合均值跌破多少该扩号"的规则；建议结合 §13.5 的扩号节奏一起定。
 
 ---
