@@ -564,9 +564,10 @@ Accounts 4 | Failing 0 | Min remaining 67%
 
 ### 14.4 上游 PR（指本仓库的上游，不是 CPA）
 
-- 仓库上游是 [AzureLandin/orca-ai-pool](https://github.com/AzureLandin/orca-ai-pool)（master，本人只有 READ 权限），本地 `upstream` remote 指向它，`origin` 是自己的 fork。
-- 提请内容：`scripts/poolctl.py` 的插件配置漂移检测（§14.3）。理由——插件配置写盘后是否需要重启 CPA，是个只有 render 一侧才知道的事实；让 render 直接告警，比事后翻日志找"为什么面板少了 key"便宜得多。
-- 另附一条给 CLIProxyAPI 的独立 PR：[router-for-me/CLIProxyAPI#7050](https://github.com/router-for-me/CLIProxyAPI/pull/7050)，给静默的 `plugin.reconfigure` 补一条日志。它解释的是同一个现象（配置推了但看不见），只是修在上游更合适。
+- 仓库上游是 [AzureLandin/orca-ai-pool](https://github.com/AzureLandin/orca-ai-pool)（分支 `master`，本人只有 READ 权限），本地 `upstream` remote 指向它，`origin` 是自己的 fork。
+- PR：[AzureLandin/orca-ai-pool#3](https://github.com/AzureLandin/orca-ai-pool/pull/3) —— 只带 `scripts/poolctl.py` 的漂移检测（§14.3）与一行 `.gitignore`，基于上游 `master` 单提交，不夹带本分支那 1300+ 行设计文档。
+- 理由：插件配置写盘后是否需要重启 CPA，是只有 render 一侧才知道的事实；让 render 直接告警，比事后翻日志找"为什么面板少了 key"便宜得多。
+- 关于 CPA：曾误开过一条给 CLIProxyAPI 的 PR（补 `plugin.reconfigure` 的日志），已按"上游指本仓库"的口径**关闭**；其中关于"推送静默"的观察保留在 §14.1。
 
 ### 14.5 仍未闭环
 
