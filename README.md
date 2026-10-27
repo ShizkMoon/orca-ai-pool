@@ -74,7 +74,7 @@ orca-ai-pool/
 ├── accounts.example.yaml                 # 号池清单（复制为 accounts.yaml）
 ├── README.md
 ├── scripts/
-│   └── poolctl.py                        # 唯一编排入口（5 个子命令）：render / check-opencode / quota / switch-mode / export-client
+│   └── poolctl.py                        # 唯一编排入口（6 个子命令）：render / check-opencode / quota / switch-mode / rotate-secret / export-client
 ├── templates/
 │   ├── cliproxy.config.v8.yaml.tmpl      # CPA v8 配置结构参考（手工兜底）
 │   ├── opencode2api.config.json.tmpl     # opencode2api 配置结构参考（JSONC）
@@ -581,8 +581,8 @@ docker compose restart cliproxyapi            # 插件只在 CPA 启动时加载
 
 ## 11. poolctl 用法
 
-`scripts/poolctl.py` 是唯一编排入口。注意 **CLI 只有五个子命令**（`render` / `check-opencode` / `quota` /
-`switch-mode` / `export-client`）；插件构建是 `make` 的活，不在 CLI 里：
+`scripts/poolctl.py` 是唯一编排入口。注意 **CLI 只有六个子命令**（`render` / `check-opencode` / `quota` /
+`switch-mode` / `rotate-secret` / `export-client`）；插件构建是 `make` 的活，不在 CLI 里：
 
 ### `render`
 
@@ -594,6 +594,7 @@ python3 scripts/poolctl.py render
 
 - `cliproxy/auths/<id>.json`（每个 Devin 账号）
 - `cliproxy/auths/opencode-go-pool.json`（插件池凭据，让 CPAMC 配额页出现综合卡片）
+- `nginx/conf.d/orca.conf`（入口层：TLS 443、管理面限流、`/v1/models` 短缓存）
 - `cliproxy/config.yaml`（CPA v8，含 `plugins.configs.opencode-go-quota`）
 - `opencode2api/config.json`（种子配置）
 
