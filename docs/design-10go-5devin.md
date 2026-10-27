@@ -7,7 +7,7 @@
 >
 > **v3 现状修正（§13）**：实际只上线 **4 个 Go**（3 个同源 + 1 个第三方），**Devin 尚未上线**；服务器确有全局 IPv6 `/64`。§13 把排期倒过来——**先铺出口，再扩号，Devin 最后上**。§12 里关于 10 个号的假设以 §13 为准。
 >
-> **v4 归因更正（§14）**：§13 对"4 key 只见 3"的解释（插件不响应配置变更）**被源码证伪**——配置确实推送，只是静默无日志。§14 给出真因、两个已上线改动（逐 key 展开、render 漂移检测）与上游 PR #7050。
+> **v4 归因更正（§14）**：§13 对"4 key 只见 3"的解释（插件不响应配置变更）**被源码证伪**——配置确实推送，只是静默无日志。§14 给出真因、插件 5h 聚合的 bug 修复、`poolctl` 漂移检测，以及对本仓库上游的 PR。池视图保持**纯聚合口径**，不开逐 key 行（§14.2 说明理由）。
 
 ---
 
@@ -532,44 +532,47 @@ opencode_go_pool:
 
 > 教训：`plugin.reconfigure` 存在 ≠ 它被调用 ≠ 插件处理了它。三者只能靠日志区分。
 
-### 14.2 已落地的两个改动
+### 14.2 设计取舍：池视图只给聚合，不开逐 key 行
 
-**① 配额插件按 key 展开**（`plugin/opencode-go-quota/main.go`）
+一度实现过"每个 key 一行 + 行标题标最紧窗口"，后来按预期设计撤掉了：**池视图的语义就是"这些 key 合起来还剩多少额度"**，逐 key 明细是另一层信息，塞进同一个视图会让"综合剩余"这件事失焦。
 
-- 聚合视图以前只在 `singleKey` 时追加逐 key 分组，池视图只剩一行"所有 key 综合"——**均值会掩盖饿死的那个号**（9 健康 + 1 耗尽 = 90%，看着很安全）。
-- 现在每个 key 恒有一行，行标题带该 key 最紧的窗口与重置时间；综合行标题追加"最紧 <key> <窗口> <百分比>"。
-- 顺带修掉一个真 bug：`agg` 表的键是 `rolling/weekly/monthly`，而消费端按 `5h/weekly/monthly` 取，**5h 那一路一直取到零值**，综合行的 5h 均值从未真实生效过。
-- 约束：host 端 `QuotaMetric.Value` 是 `float64`，任何字符串型 summary 指标都会让整个响应解码失败（`json: cannot unmarshal string into ... value of type float64`）。归因只能放在 `displayName`。
+真正的设计意图是：**所有 OpenCode Go key 的综合剩余用量**是唯一对外口径。所以插件侧决定不动，保持上游形态：
 
-线上验收（2026-10-27 15:25 UTC，空窗重启后）：
+- 池视图只有一行 `所有 key 综合`，每个窗口（5h / 周 / 月）给的是健康 key 的均值，描述里带 `（<n> key 均值）`，n 就是参与聚合的 key 数。
+- 失败的 key 仍单独成行（`query failed: ...`）：那不是"用量"，是故障，必须可见。
+- 明细要看单个 key 的额度时，走 `opencode-go-N.json` 那张单凭据，插件本来就有这条路径（`singleKey`），不必把明细塞进池视图。
+
+（更正一处我此前的误判：`agg` 表的初始键是 `rolling/weekly/monthly`，而循环里写的是 `agg["5h"]`；我曾据此认为 5h 均值一直取到零值。实际上 `a := agg[w.name]` 对缺失键取零值就是新建，循环会把 `"5h"` 键正常建出来——**没有这个 bug**，两处命名不一致只是可读性问题。）
+
+约束记一笔：host 端 `QuotaMetric.Value` 是 `float64`，任何字符串型 summary 指标都会让整个响应解码失败（`json: cannot unmarshal string into ... value of type float64`）。**summary 只能放数字**，文字信息只能进 `displayName` / `description`。
+
+线上验收（2026-10-27 15:25 UTC，空窗重启后，逐 key 版）——顺带记录当时的分布，说明为什么"聚合 + Failing"够用：
 
 ```
 Accounts 4 | Failing 0 | Min remaining 67%
-oc_s…VCdF · 周 97%     5h 99  weekly 97  monthly 99
-oc_s…kXkc · 周 99%     5h 100 weekly 99  monthly 100
-oc_s…ZiCs · 周 99%     5h 100 weekly 99  monthly 100
-oc_s…0vd8 · 月 67%     5h 100 weekly 97  monthly 67   <- 一直吃紧的就是这个号
-所有 key 综合 · 最紧 oc_s…0vd8 月 67% · reset 2026-11-18T08:28:50Z
+5h 均值 100% · 周 98% · 月 92%
 ```
 
-即 `min_remaining 67%` 不是一个孤立数字，而是第四个号被月度额度卡住；另外三个的月度都在 99~100%。
+四个 key 里三个的月度都在 99~100%，唯一吃紧的第四个是月度 67%（reset 2026-11-18）。也就是说**聚合视图上没有异常信号，`min_remaining 67%` 只反映那一个号**；这与"池子整体健康"并不矛盾，也是保留聚合口径的前提——真出现多号同时下滑时，均值会立刻掉下来。
 
-**② `poolctl render` 检测插件配置漂移**（`scripts/poolctl.py`）
+### 14.3 `poolctl render` 检测插件配置漂移（`scripts/poolctl.py`）
 
 - 每次 render 后把 `plugins.configs` 里受管插件配置的哈希与"当前进程启动时间"一起写进 `.poolctl-plugin-state.json`。
 - 下次 render 时若**同一进程**（启动时间未变）却出现了不同的插件配置，就告警"配置已变更但进程未重载"，并提示 `docker compose restart cliproxyapi`。
 - 两个条件缺一不可：只看哈希会在"停机期间写过配置、随后启动"时误报；只看启动时间则根本抓不到。报警时不回写状态，所以重启前每次 render 都会继续提醒。
 - CPA 没跑时（纯本地仓库）不告警，只记账。8 种场景（首跑/未变/新增 key/重复提醒/重启后/停机写/重启加载/再次新增）已逐一验证。
 
-### 14.3 上游 PR
+### 14.4 上游 PR（指本仓库的上游，不是 CPA）
 
-- [router-for-me/CLIProxyAPI#7050](https://github.com/router-for-me/CLIProxyAPI/pull/7050)：给 `plugin.reconfigure` 补一条 `pluginhost: plugin reconfigured` 日志（`internal/pluginhost/host.go`）。一行日志，行为零变化，把"静默 RPC"变成可观测事实。PR 正文写清了上面的归因链条。
+- 仓库上游是 [AzureLandin/orca-ai-pool](https://github.com/AzureLandin/orca-ai-pool)（master，本人只有 READ 权限），本地 `upstream` remote 指向它，`origin` 是自己的 fork。
+- 提请内容：`scripts/poolctl.py` 的插件配置漂移检测（§14.3）。理由——插件配置写盘后是否需要重启 CPA，是个只有 render 一侧才知道的事实；让 render 直接告警，比事后翻日志找"为什么面板少了 key"便宜得多。
+- 另附一条给 CLIProxyAPI 的独立 PR：[router-for-me/CLIProxyAPI#7050](https://github.com/router-for-me/CLIProxyAPI/pull/7050)，给静默的 `plugin.reconfigure` 补一条日志。它解释的是同一个现象（配置推了但看不见），只是修在上游更合适。
 
-### 14.4 仍未闭环
+### 14.5 仍未闭环
 
-1. **逐 key 行是否在面板上真的展示**：本机 `/v1/models` 只返回 1 个模型，无法据此判断 WebUI 对多 group 的渲染策略；管理接口原始响应已确认 5 个 group 都在，展示层待实际登录面板核对。
-2. **CPA 版本落后一档**：线上跑 `v8.0.43`，上游已发 `v8.0.44`。§13 的重启流程可复用，升级前先确认 44 版没有插件 ABI 变更。
-3. **`management.secret-key = sk-123456` 仍未轮换**，且 8317 直接暴露公网（§12 已列为 P0）。
+1. **CPA 版本落后一档**：线上跑 `v8.0.43`，上游已发 `v8.0.44`。§13 的空窗重启流程可复用，升级前先确认 44 版没有插件 ABI 变更。
+2. **`management.secret-key = sk-123456` 仍未轮换**，且 8317 直接暴露公网（§12 已列为 P0）。
+3. **聚合均值的"预警阈值"还没定**：现在只报 `min_remaining`，没有"综合均值跌破多少该扩号"的规则；建议结合 §13.5 的扩号节奏一起定。
 
 ---
 

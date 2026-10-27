@@ -459,13 +459,12 @@ func quotaFetch(request []byte) []byte {
 	groups := make([]map[string]any, 0, len(results)+1)
 	errs := 0
 	minRemaining := 101.0
-	minKey, minWindow, minReset := "", "", ""
 	// per-window aggregate across healthy keys (average remaining %, earliest reset)
 	agg := map[string]struct {
 		sum    float64
 		n      int
 		reset  string
-	}{"5h": {}, "weekly": {}, "monthly": {}}
+	}{"rolling": {}, "weekly": {}, "monthly": {}}
 	for _, r := range results {
 		if r.err != nil {
 			errs++
@@ -491,6 +490,9 @@ func quotaFetch(request []byte) []byte {
 			if remaining < 0 {
 				remaining = 0
 			}
+			if remaining < minRemaining {
+				minRemaining = remaining
+			}
 			a := agg[w.name]
 			a.sum += remaining
 			a.n++
@@ -508,24 +510,11 @@ func quotaFetch(request []byte) []byte {
 			}
 			buckets = append(buckets, b)
 		}
-		// One row per key, always — not only for single-credential fetches.
-		// Averaging hides a starved key (9 healthy + 1 exhausted shows as 90%),
-		// so the row label carries that key's tightest window.
-		label := maskKey(r.key)
-		keyMin, keyLabel, keyReset := tightest(r.u)
-		label += fmt.Sprintf(" · %s %.0f%%", keyLabel, keyMin)
-		if keyReset != "" {
-			label += " · reset " + keyReset
-		}
-		groups = append(groups, map[string]any{
-			"displayName": label,
-			"buckets":     buckets,
-		})
-		if keyMin < minRemaining {
-			minRemaining = keyMin
-			minKey = maskKey(r.key)
-			minWindow = keyLabel
-			minReset = keyReset
+		if singleKey {
+			groups = append(groups, map[string]any{
+				"displayName": maskKey(r.key),
+				"buckets":     buckets,
+			})
 		}
 	}
 	if errs < len(results) {
@@ -548,14 +537,7 @@ func quotaFetch(request []byte) []byte {
 			}
 			aggBuckets = append(aggBuckets, b)
 		}
-		aggName := "所有 key 综合"
-		if minKey != "" {
-			aggName += fmt.Sprintf(" · 最紧 %s %s %.0f%%", minKey, minWindow, minRemaining)
-			if minReset != "" {
-				aggName += " · reset " + minReset
-			}
-		}
-		groups = append(groups, map[string]any{"displayName": aggName, "buckets": aggBuckets})
+		groups = append(groups, map[string]any{"displayName": "所有 key 综合", "buckets": aggBuckets})
 	}
 	if minRemaining > 100 {
 		minRemaining = 0
@@ -563,9 +545,6 @@ func quotaFetch(request []byte) []byte {
 	summary := []map[string]any{
 		{"key": "accounts", "label": "Accounts", "value": float64(len(keys)), "unit": "keys"},
 		{"key": "accounts_failing", "label": "Failing", "value": float64(errs), "unit": "keys"},
-		// Host decodes every summary value as float64 (pluginapi.QuotaMetric.Alias),
-		// so which key/window is starving cannot ride here — it rides in the row's
-		// displayName instead.
 		{"key": "min_remaining", "label": "Min remaining", "value": minRemaining, "unit": "%"},
 	}
 
@@ -580,33 +559,6 @@ func quotaFetch(request []byte) []byte {
 	}
 
 	return okEnvelope(buildFetchResponse(summary, groups, errs, len(keys), req))
-}
-
-// tightest returns the window with the least headroom for one key, plus its
-// human label and reset time. It is what the per-key row and the summary
-// attribution are built from.
-func tightest(u *usageResponse) (remaining float64, label, reset string) {
-	remaining = 101
-	for _, w := range []struct {
-		label string
-		win   usageWindow
-	}{
-		{"5h", u.Usage.Rolling},
-		{"周", u.Usage.Weekly},
-		{"月", u.Usage.Monthly},
-	} {
-		r := 100 - w.win.Percent
-		if r < 0 {
-			r = 0
-		}
-		if r < remaining {
-			remaining, label, reset = r, w.label, w.win.ResetsAt
-		}
-	}
-	if remaining > 100 {
-		remaining = 0
-	}
-	return
 }
 
 func buildFetchResponse(summary, groups []map[string]any, errs, nkeys int, req any) map[string]any {
