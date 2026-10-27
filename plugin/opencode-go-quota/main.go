@@ -548,21 +548,25 @@ func quotaFetch(request []byte) []byte {
 			}
 			aggBuckets = append(aggBuckets, b)
 		}
-		groups = append(groups, map[string]any{"displayName": "所有 key 综合", "buckets": aggBuckets})
+		aggName := "所有 key 综合"
+		if minKey != "" {
+			aggName += fmt.Sprintf(" · 最紧 %s %s %.0f%%", minKey, minWindow, minRemaining)
+			if minReset != "" {
+				aggName += " · reset " + minReset
+			}
+		}
+		groups = append(groups, map[string]any{"displayName": aggName, "buckets": aggBuckets})
 	}
 	if minRemaining > 100 {
 		minRemaining = 0
 	}
-	minWindowLabel := minWindow
-	if minReset != "" {
-		minWindowLabel += " · reset " + minReset
-	}
 	summary := []map[string]any{
 		{"key": "accounts", "label": "Accounts", "value": float64(len(keys)), "unit": "keys"},
 		{"key": "accounts_failing", "label": "Failing", "value": float64(errs), "unit": "keys"},
+		// Host decodes every summary value as float64 (pluginapi.QuotaMetric.Alias),
+		// so which key/window is starving cannot ride here — it rides in the row's
+		// displayName instead.
 		{"key": "min_remaining", "label": "Min remaining", "value": minRemaining, "unit": "%"},
-		{"key": "min_remaining_key", "label": "Tightest key", "value": minKey, "unit": ""},
-		{"key": "min_remaining_window", "label": "In window", "value": minWindowLabel, "unit": ""},
 	}
 
 	if !singleKey {
