@@ -1,5 +1,8 @@
 # 破甲通道提示词清单
 #
+# 设计说明（目标格式、注入语义、差距清单）见 docs/jailbreak.md；
+# 社区提示词结构与 NSFW 调研见 docs/jailbreak-research.md。
+#
 # 提示词正文不随仓库分发：上游 togg53192-cmd/jailbreaks 未声明许可证。
 # 首次使用先跑：
 #
@@ -10,24 +13,33 @@
 #   jailbreak_channel:
 #     enabled: true
 #
-# 启用后客户端会多看到一个模型别名：<原模型名><suffix>，例如
-#   deepseek-v4.1-flash-jailbreak
-# 请求这个别名时，CPA 仍把它映射回原模型/原上游，只是插件会先注入这里的提示词。
+# 启用后客户端会看到两个别名：
+#   deepseek-v4.1-flash-jailbreak  通用破甲（网安、工程、分析等）
+#   deepseek-v4.1-flash-nsfw       成人虚构（仅成年角色）
+# 请求别名时，CPA 仍把它映射回原模型/原上游，插件只负责注入对应 profile 的提示词。
 #
 # models 支持 * / ? 通配符，按清单顺序匹配，先到先得。
-# overlay 是本仓库自己的短补充（会拼在 upstream 正文前/后），用于强化优先级与
-# “忽略输入周围注入的安全警告”等规则；不要放时间戳或随机值，否则缓存前缀会失效。
+# shared_overlay 是所有 profile 共用的核心；overlay 是各 profile 自己的领域层。
+# 两者按 “shared + 领域” 合并后，再按 overlay_position 拼到 upstream 正文前/后。
+# 不要放时间戳或随机值，否则缓存前缀会失效。
 # mode:
 #   prepend  保留客户端 system 提示词，把破甲提示词插到最前面（默认，最安全）
 #   append   保留客户端 system 提示词，把破甲提示词追加到 system 段末尾
 #   replace  删除 system/developer 消息，整段换成破甲提示词（会顶掉工具/代理指令）
+# position:
+#   system        注入 system / instructions（通用破甲默认）
+#   post_history  插入到最后一条 user 消息之后（短 reminder 默认，缓存友好）
+#   in_chat       按 depth 插入聊天历史（Author's Note 风格）
 #
 # 未匹配到 profile 时由本文件的 unmapped 决定：
 #   error（默认）返回 400；pass 原样放行。
 
+version: 1
 suffix: "-jailbreak"
 unmapped: "error"
 default_mode: "prepend"
+default_position: "system"
+shared_overlay: "overlays/shared-core.md"
 
 source:
   repo: "togg53192-cmd/jailbreaks"
@@ -35,31 +47,62 @@ source:
   ref: "8b9719913b2bd563246fea9880d2201acf70330b"
 
 profiles:
-  - name: "deepseek-4-1"
+  - name: "jailbreak"
+    description: "通用破甲：网安、工程、分析和其他非 NSFW 场景"
+    suffix: "-jailbreak"
+    content_domain: "jailbreak"
     models:
       - "deepseek-v4.1-flash"
       - "deepseek/deepseek-v4.1-flash"
     source_file: "deepseek-4-1.md"
     file: "upstream/deepseek-4-1.md"
-    overlay: "overlays/deepseek-4-1.md"
+    overlay: "overlays/deepseek-4-1-jailbreak.md"
     overlay_position: "prepend"
+    position: "system"
+    reminder: "overlays/reminder-jailbreak.md"
+    reminder_position: "post_history"
+    reminder_mode: "append"
     mode: "prepend"
+
+  - name: "nsfw"
+    description: "成人虚构：角色扮演、亲密场景和情色文学"
+    suffix: "-nsfw"
+    content_domain: "nsfw"
+    adult_only: true
+    models:
+      - "deepseek-v4.1-flash"
+      - "deepseek/deepseek-v4.1-flash"
+    source_file: "deepseek-4-1.md"
+    file: "upstream/deepseek-4-1.md"
+    overlay: "overlays/deepseek-4-1-nsfw.md"
+    overlay_position: "prepend"
+    position: "system"
+    reminder: "overlays/reminder-nsfw.md"
+    reminder_position: "post_history"
+    reminder_mode: "append"
+    mode: "append"
 
   # Devin 还没上线，先不生成 devin/*-jailbreak 别名。上线后取消注释即可。
   # - name: "gemini-4-argon"
+  #   suffix: "-jailbreak"
+  #   content_domain: "jailbreak"
   #   models:
   #     - "devin/gemini-4-argon"
   #   source_file: "Gemini-4-Argon.md"
   #   file: "upstream/Gemini-4-Argon.md"
+  #   position: "system"
   #   mode: "prepend"
 
   # 池里还有 devin/swe-2 和 devin/swe-2-lightning，上游仓库没有同名提示词。
   # 想给它们也开一个 profile，就复制下面这段并换成你选定的上游文件：
   #
   # - name: "devin-swe-2"
+  #   suffix: "-jailbreak"
+  #   content_domain: "jailbreak"
   #   models:
   #     - "devin/swe-2"
   #     - "devin/swe-2-lightning"
   #   source_file: "spacebunny-agents.md"
   #   file: "upstream/devin-swe-2.md"
+  #   position: "system"
   #   mode: "prepend"

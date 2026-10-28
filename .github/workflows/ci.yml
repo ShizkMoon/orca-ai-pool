@@ -20,6 +20,11 @@ jobs:
       - name: Run poolctl tests
         run: python3 -m unittest discover -s tests -v
 
+      - name: Validate eval plan and data hashes
+        run: |
+          python3 evals/run_eval.py --dry-run --plan evals/plan.json --data-dir evals/data
+          python3 evals/run_eval.py --dry-run --plan evals/plan-full.json --data-dir evals/data
+
       - name: Validate shell scripts
         run: bash -n scripts/install-nginx.sh
 

@@ -45,6 +45,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"unsafe"
@@ -53,30 +54,43 @@ import (
 )
 
 const (
-	pluginVersion = "0.1.0"
-	defaultSuffix = "-jailbreak"
-	schemaVersion = 2
+	pluginVersion   = "0.2.0"
+	defaultSuffix   = "-jailbreak"
+	defaultPosition = "system"
+	schemaVersion   = 2
 )
 
 type pluginConfig struct {
-	Suffix   string          `yaml:"suffix"`
-	Unmapped string          `yaml:"unmapped"`
-	Profiles []profileConfig `yaml:"profiles"`
+	Suffix          string          `yaml:"suffix"`
+	Unmapped        string          `yaml:"unmapped"`
+	DefaultPosition string          `yaml:"default_position"`
+	Profiles        []profileConfig `yaml:"profiles"`
 }
 
 type profileConfig struct {
-	Name     string   `yaml:"name"`
-	Models   []string `yaml:"models"`
-	Mode     string   `yaml:"mode"`
-	Prompt   string   `yaml:"prompt"`
-	matchers []*regexp.Regexp
+	Name             string   `yaml:"name"`
+	Models           []string `yaml:"models"`
+	Suffix           string   `yaml:"suffix"`
+	Mode             string   `yaml:"mode"`
+	Position         string   `yaml:"position"`
+	PositionFallback string   `yaml:"position_fallback"`
+	ContentDomain    string   `yaml:"content_domain"`
+	AdultOnly        bool     `yaml:"adult_only"`
+	Depth            int      `yaml:"depth"`
+	Prompt           string   `yaml:"prompt"`
+	Reminder         string   `yaml:"reminder"`
+	ReminderPosition string   `yaml:"reminder_position"`
+	ReminderMode     string   `yaml:"reminder_mode"`
+	ReminderDepth    int      `yaml:"reminder_depth"`
+	matchers         []*regexp.Regexp
 }
 
 var (
 	cfgMu sync.RWMutex
 	cfg   = pluginConfig{
-		Suffix:   defaultSuffix,
-		Unmapped: "error",
+		Suffix:          defaultSuffix,
+		Unmapped:        "error",
+		DefaultPosition: defaultPosition,
 	}
 )
 
@@ -149,7 +163,7 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 	if request != nil && requestLen > 0 {
 		requestBytes = C.GoBytes(unsafe.Pointer(request), C.int(requestLen))
 	}
-	raw, errHandle := handleMethod(C.GoString(method), requestBytes)
+	raw, errHandle := safeHandleMethod(C.GoString(method), requestBytes)
 	if errHandle != nil {
 		writeResponse(response, errorEnvelope("plugin_error", errHandle.Error()))
 		return 1
@@ -187,6 +201,15 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 	}
 }
 
+func safeHandleMethod(method string, request []byte) (raw []byte, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("plugin panic: %v", recovered)
+		}
+	}()
+	return handleMethod(method, request)
+}
+
 func configure(raw []byte) error {
 	var req registrationRequest
 	if len(raw) > 0 {
@@ -199,8 +222,9 @@ func configure(raw []byte) error {
 	}
 
 	next := pluginConfig{
-		Suffix:   defaultSuffix,
-		Unmapped: "error",
+		Suffix:          defaultSuffix,
+		Unmapped:        "error",
+		DefaultPosition: defaultPosition,
 	}
 	if len(req.ConfigYAML) > 0 {
 		if err := yaml.Unmarshal(req.ConfigYAML, &next); err != nil {
@@ -218,6 +242,15 @@ func configure(raw []byte) error {
 	if next.Unmapped != "error" && next.Unmapped != "pass" {
 		return fmt.Errorf("unmapped must be error or pass, got %q", next.Unmapped)
 	}
+	next.DefaultPosition = strings.ToLower(strings.TrimSpace(next.DefaultPosition))
+	if next.DefaultPosition == "" {
+		next.DefaultPosition = defaultPosition
+	}
+	switch next.DefaultPosition {
+	case "system", "post_history", "in_chat":
+	default:
+		return fmt.Errorf("unknown default_position %q", next.DefaultPosition)
+	}
 
 	seenNames := make(map[string]struct{}, len(next.Profiles))
 	for index := range next.Profiles {
@@ -233,6 +266,13 @@ func configure(raw []byte) error {
 		if len(profile.Models) == 0 {
 			return fmt.Errorf("profile %q has no models", profile.Name)
 		}
+		profile.Suffix = strings.ToLower(strings.TrimSpace(profile.Suffix))
+		if profile.Suffix == "" {
+			profile.Suffix = next.Suffix
+		}
+		if strings.ContainsAny(profile.Suffix, " \t\r\n") {
+			return fmt.Errorf("profile %q suffix must contain no whitespace", profile.Name)
+		}
 		profile.Mode = strings.ToLower(strings.TrimSpace(profile.Mode))
 		if profile.Mode == "" {
 			profile.Mode = "prepend"
@@ -242,9 +282,75 @@ func configure(raw []byte) error {
 		default:
 			return fmt.Errorf("profile %q has unknown mode %q", profile.Name, profile.Mode)
 		}
+		profile.ContentDomain = strings.ToLower(strings.TrimSpace(profile.ContentDomain))
+		if profile.ContentDomain == "" {
+			profile.ContentDomain = "jailbreak"
+		}
+		switch profile.ContentDomain {
+		case "jailbreak", "nsfw":
+		default:
+			return fmt.Errorf("profile %q has unknown content_domain %q", profile.Name, profile.ContentDomain)
+		}
+		if profile.ContentDomain == "nsfw" && !profile.AdultOnly {
+			return fmt.Errorf("profile %q is nsfw but adult_only is false", profile.Name)
+		}
+		if profile.ContentDomain != "nsfw" && profile.AdultOnly {
+			return fmt.Errorf("profile %q is not nsfw but adult_only is true", profile.Name)
+		}
+		profile.Position = strings.ToLower(strings.TrimSpace(profile.Position))
+		if profile.Position == "" {
+			profile.Position = next.DefaultPosition
+		}
+		switch profile.Position {
+		case "system", "post_history", "in_chat":
+		default:
+			return fmt.Errorf("profile %q has unknown position %q", profile.Name, profile.Position)
+		}
+		profile.PositionFallback = strings.ToLower(strings.TrimSpace(profile.PositionFallback))
+		if profile.PositionFallback == "" {
+			profile.PositionFallback = "error"
+		}
+		switch profile.PositionFallback {
+		case "error", "system":
+		default:
+			return fmt.Errorf("profile %q has unknown position_fallback %q", profile.Name, profile.PositionFallback)
+		}
+		if profile.Depth < 0 {
+			return fmt.Errorf("profile %q depth must be >= 0", profile.Name)
+		}
+		if profile.Position != "in_chat" && profile.Depth != 0 {
+			return fmt.Errorf("profile %q only supports depth with position=in_chat", profile.Name)
+		}
 		profile.Prompt = strings.TrimSpace(profile.Prompt)
 		if profile.Prompt == "" {
 			return fmt.Errorf("profile %q prompt is empty", profile.Name)
+		}
+		profile.Reminder = strings.TrimSpace(profile.Reminder)
+		if profile.Reminder != "" {
+			profile.ReminderPosition = strings.ToLower(strings.TrimSpace(profile.ReminderPosition))
+			if profile.ReminderPosition == "" {
+				profile.ReminderPosition = "post_history"
+			}
+			switch profile.ReminderPosition {
+			case "system", "post_history", "in_chat":
+			default:
+				return fmt.Errorf("profile %q has unknown reminder_position %q", profile.Name, profile.ReminderPosition)
+			}
+			profile.ReminderMode = strings.ToLower(strings.TrimSpace(profile.ReminderMode))
+			if profile.ReminderMode == "" {
+				profile.ReminderMode = "append"
+			}
+			switch profile.ReminderMode {
+			case "prepend", "append", "replace":
+			default:
+				return fmt.Errorf("profile %q has unknown reminder_mode %q", profile.Name, profile.ReminderMode)
+			}
+			if profile.ReminderDepth < 0 {
+				return fmt.Errorf("profile %q reminder_depth must be >= 0", profile.Name)
+			}
+			if profile.ReminderPosition != "in_chat" && profile.ReminderDepth != 0 {
+				return fmt.Errorf("profile %q only supports reminder_depth with reminder_position=in_chat", profile.Name)
+			}
 		}
 		profile.matchers = make([]*regexp.Regexp, 0, len(profile.Models))
 		for _, pattern := range profile.Models {
@@ -273,7 +379,8 @@ func pluginRegistration() map[string]any {
 			"ConfigFields": []map[string]any{
 				{"Name": "suffix", "Type": "string", "Description": "Model-name suffix that marks a jailbreak alias (default -jailbreak)"},
 				{"Name": "unmapped", "Type": "enum", "EnumValues": []string{"error", "pass"}, "Description": "Behavior when no profile matches the requested model"},
-				{"Name": "profiles", "Type": "array", "Description": "Model patterns mapped to prompt text and injection mode"},
+					{"Name": "default_position", "Type": "enum", "EnumValues": []string{"system", "post_history", "in_chat"}, "Description": "Default injection position"},
+					{"Name": "profiles", "Type": "array", "Description": "Model patterns mapped to prompt text, suffix, position and mode"},
 			},
 		},
 		"capabilities": map[string]any{
@@ -292,28 +399,34 @@ func interceptBefore(raw []byte) ([]byte, error) {
 	current := cfg
 	cfgMu.RUnlock()
 
-	baseModel, isJailbreak := stripSuffix(firstNonEmpty(req.RequestedModel, req.Model), current.Suffix)
-	if !isJailbreak {
+	requested := strings.TrimSpace(firstNonEmpty(req.RequestedModel, req.Model))
+	baseModel, profile, matchErr := matchRequested(current, requested)
+	if matchErr == errNotJailbreak {
 		return okEnvelope(interceptResponse{})
 	}
-
-	profile, err := selectProfile(current, baseModel)
-	if err != nil {
+	if matchErr != nil {
 		if current.Unmapped == "pass" {
 			return okEnvelope(interceptResponse{})
 		}
-		return terminatedResponse(http.StatusBadRequest, err.Error(), req.SourceFormat)
+		return terminatedResponse(http.StatusBadRequest, matchErr.Error(), req.SourceFormat)
 	}
 
-	updated, changed, supported := injectPrompt(req.Body, profile.Prompt, profile.Mode)
+	normalized, modelChanged := normalizeBodyModel(req.Body, requested, baseModel)
+	updated, changed, supported := injectProfile(normalized, *profile, req.SourceFormat)
 	if !supported {
 		return terminatedResponse(
 			http.StatusBadRequest,
-			"unsupported request body for jailbreak injection (expected messages, system, instructions, or input)",
+			fmt.Sprintf(
+				"unsupported request body for jailbreak injection (profile=%s position=%s source=%s)",
+				profile.Name, profile.Position, req.SourceFormat,
+			),
 			req.SourceFormat,
 		)
 	}
 	if !changed {
+		if modelChanged {
+			return okEnvelope(interceptResponse{Body: normalized})
+		}
 		return okEnvelope(interceptResponse{})
 	}
 	return okEnvelope(interceptResponse{Body: updated})
@@ -335,9 +448,63 @@ func stripSuffix(model, suffix string) (string, bool) {
 	return base, true
 }
 
+var errNotJailbreak = fmt.Errorf("not a jailbreak model")
+
+func profileSuffix(profile profileConfig, defaultSuffix string) string {
+	if profile.Suffix != "" {
+		return profile.Suffix
+	}
+	return defaultSuffix
+}
+
+func matchRequested(current pluginConfig, requested string) (string, *profileConfig, error) {
+	suffixes := make([]string, 0, len(current.Profiles)+1)
+	seen := make(map[string]struct{}, len(current.Profiles)+1)
+	for _, profile := range current.Profiles {
+		suffix := profileSuffix(profile, current.Suffix)
+		key := strings.ToLower(suffix)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		suffixes = append(suffixes, suffix)
+	}
+	if len(suffixes) == 0 {
+		suffixes = append(suffixes, current.Suffix)
+	}
+	sort.SliceStable(suffixes, func(i, j int) bool {
+		if len(suffixes[i]) == len(suffixes[j]) {
+			return suffixes[i] < suffixes[j]
+		}
+		return len(suffixes[i]) > len(suffixes[j])
+	})
+	for _, suffix := range suffixes {
+		base, ok := stripSuffix(requested, suffix)
+		if !ok {
+			continue
+		}
+		profile, err := selectProfileForSuffix(current, base, suffix)
+		if err != nil {
+			return "", nil, err
+		}
+		return base, profile, nil
+	}
+	return "", nil, errNotJailbreak
+}
+
 func selectProfile(current pluginConfig, model string) (*profileConfig, error) {
+	return selectProfileForSuffix(current, model, "")
+}
+
+func selectProfileForSuffix(current pluginConfig, model, suffix string) (*profileConfig, error) {
 	candidate := strings.TrimSpace(model)
+	matchesSuffix := func(profile profileConfig) bool {
+		return suffix == "" || strings.EqualFold(profileSuffix(profile, current.Suffix), suffix)
+	}
 	for index := range current.Profiles {
+		if !matchesSuffix(current.Profiles[index]) {
+			continue
+		}
 		for _, pattern := range current.Profiles[index].Models {
 			if strings.EqualFold(pattern, candidate) {
 				return &current.Profiles[index], nil
@@ -345,11 +512,17 @@ func selectProfile(current pluginConfig, model string) (*profileConfig, error) {
 		}
 	}
 	for index := range current.Profiles {
+		if !matchesSuffix(current.Profiles[index]) {
+			continue
+		}
 		for _, matcher := range current.Profiles[index].matchers {
 			if matcher.MatchString(strings.ToLower(candidate)) {
 				return &current.Profiles[index], nil
 			}
 		}
+	}
+	if suffix != "" {
+		return nil, fmt.Errorf("no jailbreak profile matches model %q with suffix %q", candidate, suffix)
 	}
 	return nil, fmt.Errorf("no jailbreak profile matches model %q", candidate)
 }
@@ -434,6 +607,230 @@ func injectPrompt(body []byte, prompt, mode string) ([]byte, bool, bool) {
 	return body, false, false
 }
 
+func normalizeBodyModel(body []byte, requested, base string) ([]byte, bool) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(body, &root); err != nil {
+		return body, false
+	}
+	raw, ok := root["model"]
+	if !ok {
+		return body, false
+	}
+	var model string
+	if err := json.Unmarshal(raw, &model); err != nil {
+		return body, false
+	}
+	if !strings.EqualFold(strings.TrimSpace(model), strings.TrimSpace(requested)) {
+		return body, false
+	}
+	root["model"] = marshalString(base)
+	encoded, err := json.Marshal(root)
+	if err != nil {
+		return body, false
+	}
+	return encoded, true
+}
+
+func injectProfile(body []byte, profile profileConfig, sourceFormat string) ([]byte, bool, bool) {
+	updated, changed, supported := injectAtPosition(
+		body, profile.Prompt, profile.Mode, profile.Position,
+		profile.Depth, profile.PositionFallback, sourceFormat,
+	)
+	if !supported {
+		return body, false, false
+	}
+	if profile.Reminder != "" {
+		reminderBody, reminderChanged, reminderSupported := injectAtPosition(
+			updated, profile.Reminder, profile.ReminderMode, profile.ReminderPosition,
+			profile.ReminderDepth, profile.PositionFallback, sourceFormat,
+		)
+		if reminderSupported {
+			updated = reminderBody
+			changed = changed || reminderChanged
+		}
+	}
+	return updated, changed, true
+}
+
+func injectAtPosition(body []byte, prompt, mode, position string, depth int, positionFallback, sourceFormat string) ([]byte, bool, bool) {
+	if position == "" {
+		position = "system"
+	}
+	fallback := func() ([]byte, bool, bool) {
+		if positionFallback == "system" {
+			return injectPrompt(body, prompt, mode)
+		}
+		return body, false, false
+	}
+	switch position {
+	case "system":
+		return injectPrompt(body, prompt, mode)
+	case "post_history", "in_chat":
+		if sourceIsAnthropicOrResponses(sourceFormat) {
+			return fallback()
+		}
+		if position == "post_history" {
+			updated, changed, supported := injectPostHistory(body, prompt)
+			if supported {
+				return updated, changed, true
+			}
+			return fallback()
+		}
+		updated, changed, supported := injectInChat(body, prompt, depth)
+		if supported {
+			return updated, changed, true
+		}
+		return fallback()
+	default:
+		return body, false, false
+	}
+}
+
+func sourceIsAnthropicOrResponses(sourceFormat string) bool {
+	lower := strings.ToLower(sourceFormat)
+	return strings.Contains(lower, "anthropic") ||
+		strings.Contains(lower, "claude") ||
+		strings.Contains(lower, "responses")
+}
+
+func injectPostHistory(body []byte, prompt string) ([]byte, bool, bool) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(body, &root); err != nil {
+		return body, false, false
+	}
+	rawMessages, ok := root["messages"]
+	if !ok {
+		return body, false, false
+	}
+	var messages []json.RawMessage
+	if err := json.Unmarshal(rawMessages, &messages); err != nil {
+		return body, false, false
+	}
+	roles := make([]string, len(messages))
+	for index, message := range messages {
+		var fields struct {
+			Role string `json:"role"`
+		}
+		if err := json.Unmarshal(message, &fields); err != nil {
+			return body, false, false
+		}
+		roles[index] = fields.Role
+	}
+	lastUser := -1
+	for index, role := range roles {
+		if role == "user" {
+			lastUser = index
+		}
+	}
+	insertAt := len(messages)
+	if lastUser >= 0 {
+		insertAt = lastUser + 1
+	}
+	for index := insertAt; index < len(messages); index++ {
+		if roles[index] == "system" || roles[index] == "developer" {
+			var fields struct {
+				Content json.RawMessage `json:"content"`
+			}
+			if json.Unmarshal(messages[index], &fields) == nil && contentHasPrompt(fields.Content, prompt) {
+				return body, false, true
+			}
+		}
+	}
+	newMessage, _ := json.Marshal(map[string]any{"role": "system", "content": prompt})
+	out := make([]json.RawMessage, 0, len(messages)+1)
+	out = append(out, messages[:insertAt]...)
+	out = append(out, newMessage)
+	out = append(out, messages[insertAt:]...)
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return body, false, false
+	}
+	root["messages"] = encoded
+	return marshalBody(root)
+}
+
+func injectInChat(body []byte, prompt string, depth int) ([]byte, bool, bool) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(body, &root); err != nil {
+		return body, false, false
+	}
+	rawMessages, ok := root["messages"]
+	if !ok {
+		return body, false, false
+	}
+	var messages []json.RawMessage
+	if err := json.Unmarshal(rawMessages, &messages); err != nil {
+		return body, false, false
+	}
+	for _, message := range messages {
+		var fields struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		}
+		if json.Unmarshal(message, &fields) == nil &&
+			(fields.Role == "system" || fields.Role == "developer") &&
+			contentHasPrompt(fields.Content, prompt) {
+			return body, false, true
+		}
+	}
+	insertAt := len(messages) - depth
+	if insertAt < 0 {
+		insertAt = 0
+	}
+	newMessage, _ := json.Marshal(map[string]any{"role": "system", "content": prompt})
+	out := make([]json.RawMessage, 0, len(messages)+1)
+	out = append(out, messages[:insertAt]...)
+	out = append(out, newMessage)
+	out = append(out, messages[insertAt:]...)
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return body, false, false
+	}
+	root["messages"] = encoded
+	return marshalBody(root)
+}
+
+func normalizeText(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	return strings.TrimRight(value, " \t\n")
+}
+
+func contentHasPrompt(raw json.RawMessage, prompt string) bool {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return normalizeText(text) == normalizeText(prompt)
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &blocks) == nil {
+		for _, block := range blocks {
+			if block.Type == "text" && normalizeText(block.Text) == normalizeText(prompt) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func textHasPrompt(text, prompt, mode string) bool {
+	normalizedText := normalizeText(text)
+	normalizedPrompt := normalizeText(prompt)
+	if normalizedText == normalizedPrompt {
+		return true
+	}
+	switch mode {
+	case "prepend":
+		return strings.HasPrefix(normalizedText, normalizedPrompt+"\n\n")
+	case "append":
+		return strings.HasSuffix(normalizedText, "\n\n"+normalizedPrompt)
+	default:
+		return false
+	}
+}
+
 func marshalBody(root map[string]json.RawMessage) ([]byte, bool, bool) {
 	out, err := json.Marshal(root)
 	if err != nil {
@@ -464,8 +861,7 @@ func injectOpenAIMessages(raw json.RawMessage, prompt, mode string) (json.RawMes
 	}
 
 	hasPrompt := func(content json.RawMessage) bool {
-		var text string
-		return json.Unmarshal(content, &text) == nil && text == prompt
+		return contentHasPrompt(content, prompt)
 	}
 	systemCount := 0
 	containsPrompt := false
@@ -546,7 +942,7 @@ func injectSystemValue(raw json.RawMessage, prompt, mode string) (json.RawMessag
 	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
-		if text == prompt {
+		if textHasPrompt(text, prompt, mode) {
 			return raw, false, nil
 		}
 		switch mode {
@@ -569,7 +965,8 @@ func injectSystemValue(raw json.RawMessage, prompt, mode string) (json.RawMessag
 				Type string `json:"type"`
 				Text string `json:"text"`
 			}
-			if json.Unmarshal(block, &fields) == nil && fields.Type == "text" && fields.Text == prompt {
+			if json.Unmarshal(block, &fields) == nil && fields.Type == "text" &&
+				normalizeText(fields.Text) == normalizeText(prompt) {
 				containsPrompt = true
 				break
 			}

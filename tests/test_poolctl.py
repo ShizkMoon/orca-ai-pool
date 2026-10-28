@@ -102,6 +102,113 @@ profiles:
                 "ORCA-OVERLAY\n\nUPSTREAM-BODY",
             )
 
+    def test_compiles_two_profiles_with_own_suffix_and_position(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "prompts" / "upstream").mkdir(parents=True)
+            (root / "prompts" / "overlays").mkdir(parents=True)
+            (root / "prompts" / "manifest.yaml").write_text(
+                """
+version: 1
+suffix: "-jailbreak"
+default_mode: "prepend"
+default_position: "system"
+shared_overlay: "overlays/shared.md"
+profiles:
+  - name: "jailbreak"
+    suffix: "-jailbreak"
+    content_domain: "jailbreak"
+    models: ["deepseek-v4.1-flash"]
+    file: "upstream/deepseek.md"
+    overlay: "overlays/jailbreak.md"
+  - name: "nsfw"
+    suffix: "-nsfw"
+    content_domain: "nsfw"
+    adult_only: true
+    models: ["deepseek-v4.1-flash"]
+    file: "upstream/deepseek.md"
+    overlay: "overlays/nsfw.md"
+    position: "post_history"
+""",
+                encoding="utf-8",
+            )
+            (root / "prompts" / "upstream" / "deepseek.md").write_text(
+                "BASE\n", encoding="utf-8"
+            )
+            (root / "prompts" / "overlays" / "shared.md").write_text(
+                "SHARED\n", encoding="utf-8"
+            )
+            (root / "prompts" / "overlays" / "jailbreak.md").write_text(
+                "JB\n", encoding="utf-8"
+            )
+            (root / "prompts" / "overlays" / "nsfw.md").write_text(
+                "NSFW\n", encoding="utf-8"
+            )
+
+            config = poolctl.load_jailbreak_config(root, {"enabled": True})
+
+            self.assertEqual([p["name"] for p in config["profiles"]], ["jailbreak", "nsfw"])
+            self.assertEqual(config["profiles"][0]["suffix"], "-jailbreak")
+            self.assertEqual(config["profiles"][0]["position"], "system")
+            self.assertEqual(config["profiles"][1]["suffix"], "-nsfw")
+            self.assertEqual(config["profiles"][1]["position"], "post_history")
+            self.assertTrue(config["profiles"][1]["adult_only"])
+            self.assertEqual(
+                config["profiles"][1]["prompt"],
+                "SHARED\n\nNSFW\n\nBASE",
+            )
+
+    def test_nsfw_profile_requires_adult_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "prompts" / "upstream").mkdir(parents=True)
+            (root / "prompts" / "manifest.yaml").write_text(
+                """
+profiles:
+  - name: "nsfw"
+    suffix: "-nsfw"
+    content_domain: "nsfw"
+    models: ["m"]
+    file: "upstream/m.md"
+""",
+                encoding="utf-8",
+            )
+            (root / "prompts" / "upstream" / "m.md").write_text("JB", encoding="utf-8")
+            with self.assertRaises(poolctl.PoolctlError) as ctx:
+                poolctl.load_jailbreak_config(root, {"enabled": True})
+            self.assertIn("adult_only", str(ctx.exception))
+
+    def test_compiles_short_reminder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "prompts" / "upstream").mkdir(parents=True)
+            (root / "prompts" / "overlays").mkdir(parents=True)
+            (root / "prompts" / "manifest.yaml").write_text(
+                """
+profiles:
+  - name: "jailbreak"
+    suffix: "-jailbreak"
+    models: ["m"]
+    file: "upstream/m.md"
+    reminder: "overlays/reminder.md"
+    reminder_position: "post_history"
+    reminder_mode: "append"
+""",
+                encoding="utf-8",
+            )
+            (root / "prompts" / "upstream" / "m.md").write_text("LONG", encoding="utf-8")
+            (root / "prompts" / "overlays" / "reminder.md").write_text(
+                "SHORT", encoding="utf-8"
+            )
+
+            config = poolctl.load_jailbreak_config(root, {"enabled": True})
+            profile = config["profiles"][0]
+            self.assertEqual(profile["prompt"], "LONG")
+            self.assertEqual(profile["reminder"], "SHORT")
+            self.assertEqual(profile["reminder_position"], "post_history")
+            self.assertEqual(profile["reminder_mode"], "append")
+            self.assertEqual(len(profile["reminder_sha256"]), 64)
+
     def test_missing_overlay_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -193,7 +300,100 @@ class CliproxyPluginConfigTests(unittest.TestCase):
         aliases = [item.get("alias") for item in models]
         self.assertIn("deepseek-v4.1-flash", aliases)
         self.assertIn("deepseek-v4.1-flash-jailbreak", aliases)
+        self.assertIn("gpt-5.6-terra", aliases)
+        self.assertNotIn("model_aliases", plugin)
         self.assertNotIn("oauth-model-alias", config)
+
+    def test_client_compat_alias_is_cpa_route(self):
+        config = poolctl._build_cliproxy_config(
+            self._env(),
+            "pro-only",
+            [],
+            [{"api_key": "sk-goat", "weight": 1}],
+            [],
+            {"enabled": False},
+        )
+        pools = {
+            item["name"]: item
+            for item in config["api-keys"]["openai-compatibility"]
+        }
+        expected = {
+            "opencode-go-pool": "deepseek-v4.1-flash",
+            "command-code-goat": "deepseek/deepseek-v4.1-flash",
+        }
+        for pool_name, upstream_name in expected.items():
+            models = pools[pool_name]["models"]
+            aliases = [item.get("alias") for item in models]
+            self.assertIn("gpt-5.6-terra", aliases)
+            terra = next(item for item in models if item.get("alias") == "gpt-5.6-terra")
+            self.assertEqual(terra["name"], upstream_name)
+        self.assertNotIn("plugins", config)
+
+    def test_two_profiles_generate_both_aliases(self):
+        jailbreak = {
+            "suffix": "-jailbreak",
+            "unmapped": "error",
+            "default_position": "system",
+            "profiles": [
+                {
+                    "name": "jailbreak",
+                    "suffix": "-jailbreak",
+                    "content_domain": "jailbreak",
+                    "models": ["deepseek-v4.1-flash"],
+                    "mode": "prepend",
+                    "position": "system",
+                    "prompt": "JB",
+                },
+                {
+                    "name": "nsfw",
+                    "suffix": "-nsfw",
+                    "content_domain": "nsfw",
+                    "adult_only": True,
+                    "models": ["deepseek-v4.1-flash"],
+                    "mode": "append",
+                    "position": "post_history",
+                    "prompt": "NSFW",
+                },
+            ],
+        }
+        config = poolctl._build_cliproxy_config(
+            self._env(), "pro-only", [], [], [], {"enabled": False}, jailbreak
+        )
+        models = config["api-keys"]["openai-compatibility"][0]["models"]
+        aliases = [item.get("alias") for item in models]
+        self.assertIn("deepseek-v4.1-flash-jailbreak", aliases)
+        self.assertIn("deepseek-v4.1-flash-nsfw", aliases)
+
+        plugin = config["plugins"]["configs"]["jailbreak-inject"]
+        self.assertEqual(plugin["profiles"][1]["suffix"], "-nsfw")
+        self.assertEqual(plugin["profiles"][1]["position"], "post_history")
+        self.assertTrue(plugin["profiles"][1]["adult_only"])
+
+    def test_duplicate_suffix_for_same_base_is_rejected(self):
+        jailbreak = {
+            "suffix": "-jailbreak",
+            "unmapped": "error",
+            "profiles": [
+                {
+                    "name": "one",
+                    "suffix": "-jailbreak",
+                    "models": ["deepseek-v4.1-flash"],
+                    "mode": "prepend",
+                    "prompt": "A",
+                },
+                {
+                    "name": "two",
+                    "suffix": "-jailbreak",
+                    "models": ["deepseek-v4.1-flash"],
+                    "mode": "append",
+                    "prompt": "B",
+                },
+            ],
+        }
+        with self.assertRaises(poolctl.PoolctlError):
+            poolctl._build_cliproxy_config(
+                self._env(), "pro-only", [], [], [], {"enabled": False}, jailbreak
+            )
 
     def test_devin_alias_uses_fork(self):
         jailbreak = {
@@ -240,11 +440,38 @@ class CliproxyPluginConfigTests(unittest.TestCase):
             ["deepseek-v4.1-flash-jailbreak", "devin/gemini-4-argon-jailbreak"],
         )
 
-    def test_without_jailbreak_no_plugin_section(self):
+    def test_without_jailbreak_keeps_compat_alias_in_cpa(self):
         config = poolctl._build_cliproxy_config(
             self._env(), "pro-only", [], [], [], {"enabled": False}, None
         )
+        models = config["api-keys"]["openai-compatibility"][0]["models"]
+        self.assertIn("gpt-5.6-terra", [item.get("alias") for item in models])
         self.assertNotIn("plugins", config)
+
+    def test_public_models_hide_client_compat_alias(self):
+        jailbreak = {
+            "suffix": "-jailbreak",
+            "unmapped": "error",
+            "profiles": [
+                {
+                    "name": "jailbreak",
+                    "suffix": "-jailbreak",
+                    "models": ["deepseek-v4.1-flash"],
+                },
+                {
+                    "name": "nsfw",
+                    "suffix": "-nsfw",
+                    "models": ["deepseek-v4.1-flash"],
+                },
+            ],
+        }
+        entries = poolctl._public_model_entries(jailbreak)
+        ids = [item["id"] for item in entries]
+        self.assertNotIn("gpt-5.6-terra", ids)
+        self.assertIn("deepseek-v4.1-flash", ids)
+        self.assertIn("deepseek-v4.1-flash-jailbreak", ids)
+        self.assertIn("deepseek-v4.1-flash-nsfw", ids)
+        self.assertEqual(ids.count("deepseek-v4.1-flash"), 1)
 
 
 VALID_ENV = """\
@@ -273,6 +500,9 @@ def write_repo(root, accounts=VALID_ACCOUNTS, env=VALID_ENV):
     root = Path(root)
     (root / "accounts.yaml").write_text(accounts, encoding="utf-8")
     (root / ".env").write_text(env, encoding="utf-8")
+    plugin = root / "cliproxy" / "plugins" / "linux" / "amd64" / "jailbreak-inject.so"
+    plugin.parent.mkdir(parents=True, exist_ok=True)
+    plugin.write_bytes(b"")
 
 
 class RenderSafetyTests(unittest.TestCase):
@@ -303,6 +533,22 @@ class RenderSafetyTests(unittest.TestCase):
                 stat.S_IMODE((root / "cliproxy" / "auths").stat().st_mode),
                 0o700,
             )
+
+    def test_render_writes_public_models_without_compat_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_repo(root)
+            self.assertEqual(self._render(root), 0)
+
+            models = json.loads((root / "nginx" / "models.json").read_text())
+            ids = [item["id"] for item in models["data"]]
+            self.assertIn("deepseek-v4.1-flash", ids)
+            self.assertIn("devin/swe-2", ids)
+            self.assertNotIn("gpt-5.6-terra", ids)
+
+            nginx_conf = (root / "nginx" / "conf.d" / "orca.conf").read_text()
+            self.assertIn("auth_request /_orca_models_auth;", nginx_conf)
+            self.assertIn("alias /etc/nginx/orca-models.json;", nginx_conf)
 
     def test_render_removes_stale_devin_credentials_with_custom_ids(self):
         with tempfile.TemporaryDirectory() as tmp:

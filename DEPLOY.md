@@ -96,7 +96,7 @@ python3 scripts/poolctl.py check-opencode
 #    需要 Go 1.21+ 与 CGO；没有插件也能跑主网关，只是 CPAMC 少一张 Go 余量卡
 cd plugin/opencode-go-quota && make install && cd ../..
 
-# 3.1 可选：破甲模型（/v1/models 里多出 <模型名>-jailbreak）
+# 3.1 可选：破甲模型（/v1/models 里多出 <模型名>-jailbreak 和 <模型名>-nsfw）
 #     先在 accounts.yaml 里把 jailbreak_channel.enabled 改成 true
 python3 scripts/poolctl.py sync-jailbreaks
 cd plugin/jailbreak-inject && make install && cd ../..
@@ -116,12 +116,35 @@ curl -s http://127.0.0.1:8317/v1/models \
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18317/v1/models
 ```
 
-模型列表只含 `devin/swe-2`、`devin/swe-2-lightning`、`devin/gemini-4-argon`、`deepseek-v4.1-flash` 四个模型即成功。
+模型列表含基座模型和对应的 `-jailbreak` / `-nsfw` 别名即成功。
+
+### 破甲评测
+
+```bash
+cd /opt/orca-ai-pool
+set -a && . ./.env && set +a
+python3 evals/run_eval.py --plan evals/plan.json \
+  --base-url http://127.0.0.1:18317 --out evals/results/alias
+python3 evals/run_eval.py --plan evals/plan.json --baseline-only \
+  --base-url http://127.0.0.1:18317 --out evals/results/base
+
+# 全量：457 条别名 + NSFW 全量/其余每域 20 条基座对照
+python3 evals/run_eval.py --plan evals/plan-full.json \
+  --base-url http://127.0.0.1:18317 --out evals/results/full-alias
+python3 evals/run_eval.py --plan evals/plan-full.json --baseline-only --limit 20 \
+  --base-url http://127.0.0.1:18317 --out evals/results/full-base20
+```
+
+评测只读本地固定样本，运行前校验 `evals/data/sources.json` 里的哈希。结果目录
+含可能敏感的原始响应，已加入 `.gitignore`。快速结果见
+[`docs/eval-2026-10-27.md`](docs/eval-2026-10-27.md)，全量结果见
+[`docs/eval-full-2026-10-28.md`](docs/eval-full-2026-10-28.md)。
 
 ## 第四步：面板访问
 
 > 8317 现在是 **nginx 入口**（`nginx/conf.d/orca.conf`，由 `poolctl render` 生成并拷到
-> `/etc/nginx/conf.d/`；公共代理片段在 `/etc/nginx/snippets/orca-proxy.conf`）。
+> `/etc/nginx/conf.d/`；公共代理片段在 `/etc/nginx/snippets/orca-proxy.conf`，
+> 对外模型表在 `/etc/nginx/orca-models.json`）。
 > **只有管理面限流**：`/management.html`、`/assets/*`（burst 100）、`/v0/management/*`、
 > `/v8/management/*`（burst 30），稳态 5 r/s per IP；插件配额端点单独 12 r/m（burst 5）。
 > **模型面 `/v1/*` 不限速、不限并发**——SSE 长流和并行子 agent 会自己放大瞬时并发，

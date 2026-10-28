@@ -48,7 +48,7 @@ flowchart TB
 
 | 组件 | 职责 | 数据 |
 |---|---|---|
-| nginx | 公网入口、TLS、管理面限流、`/v1/models` 短缓存 | `nginx/conf.d/orca.conf`、`nginx/snippets/orca-proxy.conf` |
+| nginx | 公网入口、TLS、管理面限流、`/v1/models` 鉴权与公开模型表 | `nginx/conf.d/orca.conf`、`nginx/snippets/orca-proxy.conf`、`nginx/models.json` |
 | CPA | 鉴权、模型路由、凭据选择、冷却、重试、usage 统计 | `cliproxy/config.yaml`、`cliproxy/auths/*.json` |
 | opencode2api | OpenAI 协议到 OpenCode Go 的桥接、proxy 轮换、连接复用 | `opencode2api/config.json` 与 state 卷 |
 | `opencode-go-quota` | AuthProvider + QuotaProvider，展示逐 key 余量 | CPA 插件配置与 `/v0/management/plugins/.../quota` |
@@ -179,8 +179,9 @@ flowchart LR
 3. 不要把时间戳、随机 ID 或临时状态放进缓存前缀。
 4. 不要为了短期均衡关闭 `session-affinity`。
 
-`/v1/models` 由 nginx 做 60 秒元数据缓存，并开启在途合并，避免冷启动惊群。模型面 `/v1/*`
-不做限流，SSE 长流和并行子 agent 不应被入口桶误伤。
+`/v1/models` 由 nginx 先向 CPA 校验 Bearer key，校验通过后直接返回 render 生成的公开
+模型表（`/etc/nginx/orca-models.json`），因此只用于路由兼容的别名不会出现在客户端模型
+选择器里。模型面其余 `/v1/*` 不做限流，SSE 长流和并行子 agent 不应被入口桶误伤。
 
 ## 7. 配额监控
 
@@ -225,11 +226,14 @@ sequenceDiagram
 
 ## 8. 破甲注入
 
+完整设计、边界条件和现状差距见 [`jailbreak.md`](jailbreak.md)；酒馆社区与 NSFW
+提示词调研见 [`jailbreak-research.md`](jailbreak-research.md)。本节只保留运行时的最小契约。
+
 破甲模型是客户端可见的别名，不是新上游：
 
 ```mermaid
 flowchart LR
-    C["请求<br/>deepseek-v4.1-flash-jailbreak"] --> P["CPA alias"]
+    C["请求<br/>...-jailbreak / ...-nsfw"] --> P["CPA alias"]
     P --> I["jailbreak-inject"]
     I --> B["注入 system / instructions / messages"]
     B --> U["基座模型<br/>deepseek-v4.1-flash"]
@@ -250,22 +254,48 @@ flowchart LR
 | `append` | 保留客户端 system，追加到 system 末尾 |
 | `replace` | 删除 system/developer，只保留破甲提示词 |
 
+注入位置：
+
+| 位置 | 行为 |
+|---|---|
+| `system` | 按 mode 注入 system / instructions；长正文默认放这里 |
+| `post_history` | 在最后一条 user 消息之后插入短 reminder |
+| `in_chat` | 按 depth 插入聊天历史 |
+
 同一个 profile 已存在时不会重复插入。未匹配 profile 默认返回 `400 jailbreak_profile_error`；
 `unmapped: pass` 可以让请求原样通过。
 
 ```yaml
 suffix: "-jailbreak"
 unmapped: "error"
+shared_overlay: "overlays/shared-core.md"
 profiles:
-  - name: "deepseek-4-1"
+  - name: "jailbreak"
+    suffix: "-jailbreak"
+    content_domain: "jailbreak"
     models: ["deepseek-v4.1-flash", "deepseek/*"]
     file: "upstream/deepseek-4-1.md"
-    overlay: "overlays/deepseek-4-1.md"
+    overlay: "overlays/deepseek-4-1-jailbreak.md"
+    position: "system"
+    reminder: "overlays/reminder-jailbreak.md"
+    reminder_position: "post_history"
     mode: "prepend"
+  - name: "nsfw"
+    suffix: "-nsfw"
+    content_domain: "nsfw"
+    adult_only: true
+    models: ["deepseek-v4.1-flash", "deepseek/*"]
+    file: "upstream/deepseek-4-1.md"
+    overlay: "overlays/deepseek-4-1-nsfw.md"
+    position: "system"
+    reminder: "overlays/reminder-nsfw.md"
+    reminder_position: "post_history"
 ```
 
-提示词写在固定 commit 的 `prompts/upstream/` 中，overlay 是本地静态补充。每次修改提示词都会让该模型
-的缓存前缀冷启动，`replace` 还会丢掉客户端原有 system 前缀。
+提示词写在固定 commit 的 `prompts/upstream/` 中，overlay 是本地静态补充。长正文放
+system 作为稳定前缀，短 reminder 放 post_history，避免每个请求尾部重复整段提示词。
+协议不支持 post_history 时，reminder 直接跳过，不退回 system，也不让请求失败。
+每次修改提示词都会让该模型的缓存前缀冷启动，`replace` 还会丢掉客户端原有 system 前缀。
 
 ## 9. 安全模型
 

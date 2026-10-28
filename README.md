@@ -13,7 +13,8 @@ orca-ai-pool 是一个多上游 AI 号池网关。它用 **CPA (CLIProxyAPI)** �
 - **三路上游**：Devin OAuth、OpenCode Go、Command Code GOAT。
 - **缓存优先**：同一会话尽量粘同一凭据，避免前缀缓存被轮询打散。
 - **配额可见**：Devin 通过管理接口读配额，OpenCode Go 通过自研插件展示逐 key 余量。
-- **可选破甲别名**：`<模型名>-jailbreak` 在进入上游前注入固定提示词，执行模型不变。
+- **可选破甲别名**：`<模型名>-jailbreak`（通用破甲）和 `<模型名>-nsfw`（成人虚构）
+  在进入上游前注入对应提示词，执行模型不变。
 - **可选 Devin 敏感词混淆**：按 `accounts.yaml` 开关对 Devin 请求做零宽字符处理。
 - **可重复部署**：`.env` + `accounts.yaml` + `poolctl render` 生成全部运行配置。
 
@@ -40,7 +41,7 @@ flowchart LR
 
 ### 对外模型
 
-客户端直接使用模型 ID，`GET /v1/models` 就是实际路由表：
+客户端直接使用模型 ID；`GET /v1/models` 返回对外公开的路由表：
 
 | 模型 | 路由 |
 |---|---|
@@ -49,9 +50,17 @@ flowchart LR
 | `devin/gemini-4-argon` | Devin OAuth |
 | `deepseek-v4.1-flash` | OpenCode Go / GOAT 聚合 |
 | `deepseek-v4.1-flash-jailbreak` | 同 `deepseek-v4.1-flash`，注入破甲提示词 |
+| `deepseek-v4.1-flash-nsfw` | 同 `deepseek-v4.1-flash`，注入成人虚构提示词 |
 
 破甲别名只在 `prompts/manifest.yaml` 配置了对应 profile 时出现。模型 ID 进入上游前
-会还原成基座模型，破甲插件只修改请求内容。
+会还原成基座模型，破甲插件只修改请求内容。长提示词放 system 走缓存，末尾只注入一条
+短 reminder。
+
+Orca 会话命名 / commit message 辅助进程仍会发送 `gpt-5.6-terra`。号池在 CPA 内部保留
+这个兼容路由（实际执行 `deepseek-v4.1-flash`），但 nginx 的 `GET /v1/models` 不展示它。
+
+生成类请求建议显式发送 `"thinking": {"type": "disabled"}`。上游的推理 token
+计入 `max_tokens`，不关闭会把正文预算挤空；插件会原样保留该字段。
 
 ## 快速开始
 
@@ -112,9 +121,10 @@ curl -s "http://$HOST:8317/v1/chat/completions" \
 | 轮换密钥 | `python3 scripts/poolctl.py rotate-secret` |
 | 导出客户端配置 | `python3 scripts/poolctl.py export-client` |
 | 同步破甲提示词 | `python3 scripts/poolctl.py sync-jailbreaks` |
+| 跑破甲评测 | `python3 evals/run_eval.py --plan evals/plan.json --out evals/results/run` |
 
-`render` 是唯一配置生成入口。CPA 普通配置会热载；C ABI 插件配置只在进程启动时读取，
-改完插件配置后需要 `docker compose restart cliproxyapi`。
+`render` 是唯一配置生成入口。CPA 普通配置会热载；C ABI 插件配置和模型表变更只在
+进程启动时读取，改完插件或模型别名后需要 `docker compose restart cliproxyapi`。
 
 ## 运行边界
 
@@ -152,7 +162,12 @@ CPAMC 管理面板地址为 `http://<服务器>:8317/management.html`，密码�
 
 | 文档 | 内容 |
 |---|---|
+| [`GLOSSARY.md`](GLOSSARY.md) | 号池与破甲通道的规范术语 |
 | [`docs/TECHNICAL.md`](docs/TECHNICAL.md) | 组件契约、配置生成、路由、缓存、插件、安全、CLI、故障排查 |
+| [`docs/jailbreak.md`](docs/jailbreak.md) | 破甲通道的设计、注入语义、失败模式与实现状态 |
+| [`docs/jailbreak-research.md`](docs/jailbreak-research.md) | 酒馆社区、公开破甲提示词与 NSFW 提示词的调研 |
+| [`docs/eval-2026-10-27.md`](docs/eval-2026-10-27.md) | 四域评测结果、基座对照与已知限制 |
+| [`docs/eval-full-2026-10-28.md`](docs/eval-full-2026-10-28.md) | 457 条全量评测、MT-Bench 对照与筛选规则 |
 | [`DEPLOY.md`](DEPLOY.md) | 新加坡服务器首次部署与日常运维 |
 | [`docs/capacity-planning.md`](docs/capacity-planning.md) | 号数、额度、缓存命中率与成本模型 |
 | [`templates/cliproxy.config.v8.yaml.tmpl`](templates/cliproxy.config.v8.yaml.tmpl) | CPA v8 手工兜底配置 |

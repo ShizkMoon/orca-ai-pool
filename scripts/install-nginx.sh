@@ -6,8 +6,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONF_SRC="$ROOT/nginx/conf.d/orca.conf"
 SNIPPET_SRC="$ROOT/nginx/snippets/orca-proxy.conf"
+MODELS_SRC="$ROOT/nginx/models.json"
 CONF_DEST="/etc/nginx/conf.d/orca.conf"
 SNIPPET_DEST="/etc/nginx/snippets/orca-proxy.conf"
+MODELS_DEST="/etc/nginx/orca-models.json"
 CERT_DEST="/etc/nginx/ssl/orca.crt"
 KEY_DEST="/etc/nginx/ssl/orca.key"
 
@@ -19,7 +21,7 @@ if ! command -v nginx >/dev/null 2>&1; then
     echo "nginx is not installed; install it first (for Debian: apt-get install nginx)" >&2
     exit 2
 fi
-if [[ ! -f "$CONF_SRC" || ! -f "$SNIPPET_SRC" ]]; then
+if [[ ! -f "$CONF_SRC" || ! -f "$SNIPPET_SRC" || ! -f "$MODELS_SRC" ]]; then
     echo "generated nginx files are missing; run: python3 scripts/poolctl.py render" >&2
     exit 2
 fi
@@ -37,6 +39,7 @@ backup_if_present() {
 
 backup_if_present "$CONF_DEST"
 backup_if_present "$SNIPPET_DEST"
+backup_if_present "$MODELS_DEST"
 
 if [[ -e "$CERT_DEST" || -e "$KEY_DEST" ]] && [[ ! -s "$CERT_DEST" || ! -s "$KEY_DEST" ]]; then
     echo "incomplete TLS state: $CERT_DEST and $KEY_DEST must both exist or both be absent" >&2
@@ -58,6 +61,7 @@ fi
 
 install -m 0644 "$CONF_SRC" "$CONF_DEST"
 install -m 0644 "$SNIPPET_SRC" "$SNIPPET_DEST"
+install -m 0644 "$MODELS_SRC" "$MODELS_DEST"
 
 nginx -t
 if command -v systemctl >/dev/null 2>&1; then

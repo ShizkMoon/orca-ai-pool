@@ -419,3 +419,185 @@ profiles:
 		t.Fatalf("unexpected response: %+v", response)
 	}
 }
+
+func TestMatchRequestedByProfileSuffix(t *testing.T) {
+	configureForTest(t, `
+suffix: "-jailbreak"
+default_position: "system"
+profiles:
+  - name: jailbreak
+    suffix: "-jailbreak"
+    content_domain: jailbreak
+    models: ["deepseek-v4.1-flash"]
+    prompt: JB
+  - name: nsfw
+    suffix: "-nsfw"
+    content_domain: nsfw
+    adult_only: true
+    position: post_history
+    models: ["deepseek-v4.1-flash"]
+    prompt: NSFW
+`)
+	cfgMu.RLock()
+	current := cfg
+	cfgMu.RUnlock()
+
+	base, profile, err := matchRequested(current, "deepseek-v4.1-flash-nsfw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base != "deepseek-v4.1-flash" || profile.Name != "nsfw" {
+		t.Fatalf("base=%q profile=%q", base, profile.Name)
+	}
+	if profile.Position != "post_history" {
+		t.Fatalf("position=%q", profile.Position)
+	}
+}
+
+func TestPostHistoryInjection(t *testing.T) {
+	body := []byte(`{"model":"m-nsfw","messages":[{"role":"system","content":"old"},{"role":"user","content":"hi"}]}`)
+	profile := profileConfig{
+		Prompt:   "NSFW",
+		Position: "post_history",
+		Mode:     "append",
+	}
+	out, changed, supported := injectProfile(body, profile, "openai")
+	if !changed || !supported {
+		t.Fatalf("changed=%v supported=%v", changed, supported)
+	}
+	messages := decodeMessages(t, out)
+	if len(messages) != 3 {
+		t.Fatalf("expected 3 messages, got %d: %s", len(messages), out)
+	}
+	if messages[0].Content != "old" || messages[1].Content != "hi" || messages[2].Content != "NSFW" {
+		t.Fatalf("unexpected order: %+v", messages)
+	}
+}
+
+func TestInChatDepthInjection(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":"a"},{"role":"user","content":"b"},{"role":"user","content":"c"}]}`)
+	profile := profileConfig{
+		Prompt:   "NOTE",
+		Position: "in_chat",
+		Depth:    1,
+		Mode:     "append",
+	}
+	out, changed, supported := injectProfile(body, profile, "openai")
+	if !changed || !supported {
+		t.Fatalf("changed=%v supported=%v", changed, supported)
+	}
+	messages := decodeMessages(t, out)
+	if len(messages) != 4 {
+		t.Fatalf("expected 4 messages, got %d: %s", len(messages), out)
+	}
+	if messages[2].Role != "system" || messages[2].Content != "NOTE" {
+		t.Fatalf("unexpected insert: %+v", messages)
+	}
+	if messages[3].Content != "c" {
+		t.Fatalf("last message changed: %+v", messages)
+	}
+}
+
+func TestBodyModelIsNormalized(t *testing.T) {
+	body := []byte(`{"model":"deepseek-v4.1-flash-nsfw","messages":[]}`)
+	out, changed := normalizeBodyModel(body, "deepseek-v4.1-flash-nsfw", "deepseek-v4.1-flash")
+	if !changed {
+		t.Fatal("model was not normalized")
+	}
+	var root struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(out, &root); err != nil {
+		t.Fatal(err)
+	}
+	if root.Model != "deepseek-v4.1-flash" {
+		t.Fatalf("model=%q", root.Model)
+	}
+}
+
+func TestStringSystemIsIdempotent(t *testing.T) {
+	body := []byte(`{"system":"old","messages":[]}`)
+	first, changed, supported := injectPrompt(body, "JB", "prepend")
+	if !changed || !supported {
+		t.Fatalf("changed=%v supported=%v", changed, supported)
+	}
+	second, changed, supported := injectPrompt(first, "JB", "prepend")
+	if changed || !supported {
+		t.Fatalf("second changed=%v supported=%v", changed, supported)
+	}
+	if string(second) != string(first) {
+		t.Fatalf("idempotent body changed: %s -> %s", first, second)
+	}
+}
+
+func TestConfigureRejectsNSFWWithoutAdultOnly(t *testing.T) {
+	raw := mustJSON(t, map[string]any{
+		"config_yaml": []byte(`
+profiles:
+  - name: nsfw
+    suffix: "-nsfw"
+    content_domain: nsfw
+    models: ["m"]
+    prompt: JB
+`),
+		"schema_version": 2,
+	})
+	if err := configure(raw); err == nil || !strings.Contains(err.Error(), "adult_only") {
+		t.Fatalf("expected adult_only error, got %v", err)
+	}
+}
+
+func TestLongPromptPlusShortReminder(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":"hi"}]}`)
+	profile := profileConfig{
+		Prompt:           "LONG",
+		Position:         "system",
+		Mode:             "prepend",
+		Reminder:         "SHORT",
+		ReminderPosition: "post_history",
+		ReminderMode:     "append",
+	}
+	out, changed, supported := injectProfile(body, profile, "openai")
+	if !changed || !supported {
+		t.Fatalf("changed=%v supported=%v", changed, supported)
+	}
+	messages := decodeMessages(t, out)
+	if len(messages) != 3 {
+		t.Fatalf("expected 3 messages, got %d: %s", len(messages), out)
+	}
+	if messages[0].Content != "LONG" || messages[1].Content != "hi" || messages[2].Content != "SHORT" {
+		t.Fatalf("unexpected order: %+v", messages)
+	}
+	second, changed, supported := injectProfile(out, profile, "openai")
+	if changed || !supported {
+		t.Fatalf("second changed=%v supported=%v", changed, supported)
+	}
+	if string(second) != string(out) {
+		t.Fatalf("idempotent body changed: %s -> %s", out, second)
+	}
+}
+
+func TestReminderIsSkippedForResponses(t *testing.T) {
+	body := []byte(`{"instructions":"old","input":"hi"}`)
+	profile := profileConfig{
+		Prompt:           "LONG",
+		Position:         "system",
+		Mode:             "append",
+		Reminder:         "SHORT",
+		ReminderPosition: "post_history",
+		ReminderMode:     "append",
+	}
+	out, changed, supported := injectProfile(body, profile, "responses")
+	if !changed || !supported {
+		t.Fatalf("changed=%v supported=%v", changed, supported)
+	}
+	var root struct {
+		Instructions string `json:"instructions"`
+	}
+	if err := json.Unmarshal(out, &root); err != nil {
+		t.Fatal(err)
+	}
+	if root.Instructions != "old\n\nLONG" {
+		t.Fatalf("instructions=%q", root.Instructions)
+	}
+}

@@ -22,6 +22,9 @@ prompts/upstream/
 __pycache__/
 *.pyc
 
+# 评测原始响应（可能含成人内容）
+evals/results/
+
 # 系统
 .DS_Store
 plugin/*/opencode-go-quota.so

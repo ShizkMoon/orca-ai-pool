@@ -83,6 +83,11 @@ REQUIRED_ENV_KEYS = [
 
 JAILBREAK_MANIFEST = "prompts/manifest.yaml"
 JAILBREAK_MODES = ("prepend", "append", "replace")
+JAILBREAK_POSITIONS = ("system", "post_history", "in_chat")
+JAILBREAK_DOMAINS = ("jailbreak", "nsfw")
+JAILBREAK_FALLBACKS = ("error", "system")
+MAX_JAILBREAK_PROMPT_BYTES = 64 * 1024
+MAX_JAILBREAK_REMINDER_BYTES = 4 * 1024
 
 # OpenAI 兼容上游组共用的模型映射（DS4.1F 跨池聚合，对外直接用上游模型名）
 # 注：gemini-4-argon 不进 OpenCode Go 池——其上游为 Google 原生
@@ -105,6 +110,12 @@ GOAT_MODELS = [
         "thinking": {"levels": ["none", "low", "high", "max"]},
     },
 ]
+
+# Orca 的 Codex 辅助进程（会话命名 / commit message）会显式传
+# --model gpt-5.6-terra。CPA 保留这个兼容别名，保证这些请求能走通；
+# nginx 的 /v1/models 返回 render 生成的公开模型表，不把它暴露给客户端。
+CLIENT_COMPAT_ALIASES = ("gpt-5.6-terra",)
+CLIENT_COMPAT_BASE_ALIAS = "deepseek-v4.1-flash"
 
 # Devin OAuth 通道对外暴露的模型（与 oauth.settings.devin 保持一致）
 DEVIN_MODEL_SETTINGS = [
@@ -612,6 +623,40 @@ def _prompt_path(prompts_dir, file_rel, label):
     return path
 
 
+def _reject_unknown_keys(mapping, allowed, label):
+    unknown = sorted(str(key) for key in mapping if key not in allowed)
+    if unknown:
+        raise PoolctlError("%s 包含未知字段: %s" % (label, ", ".join(unknown)))
+
+
+def _read_jailbreak_text(path, label, max_bytes=MAX_JAILBREAK_PROMPT_BYTES):
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise PoolctlError("%s 不是合法 UTF-8: %s" % (label, path))
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        raise PoolctlError("%s 为空: %s" % (label, path))
+    size = len(text.encode("utf-8"))
+    if size > max_bytes:
+        raise PoolctlError(
+            "%s 超过 %d bytes 上限: %s (%d bytes)"
+            % (label, max_bytes, path, size)
+        )
+    return text
+
+
+def _validate_jailbreak_suffix(value, label):
+    suffix = str(value or "").strip()
+    if not suffix or any(char.isspace() for char in suffix):
+        raise PoolctlError("%s 不能为空且不能含空白，当前值: %r" % (label, suffix))
+    return suffix
+
+
+def _jailbreak_profile_suffix(profile, default_suffix):
+    return str(profile.get("suffix") or default_suffix).strip()
+
+
 def load_jailbreak_config(root, channel):
     """把 accounts.yaml 的开关 + prompts/manifest.yaml 编译成插件配置。
 
@@ -626,11 +671,28 @@ def load_jailbreak_config(root, channel):
         return None
 
     raw = _load_jailbreak_raw(root)
-    suffix = str(raw.get("suffix") or "-jailbreak").strip()
+    _reject_unknown_keys(
+        raw,
+        {
+            "version",
+            "suffix",
+            "unmapped",
+            "default_mode",
+            "default_position",
+            "shared_overlay",
+            "source",
+            "profiles",
+        },
+        JAILBREAK_MANIFEST,
+    )
+    version = raw.get("version", 1)
+    if isinstance(version, bool) or not isinstance(version, int) or version != 1:
+        raise PoolctlError("%s 的 version 只支持 1，当前值: %r" % (JAILBREAK_MANIFEST, version))
+
+    suffix = _validate_jailbreak_suffix(raw.get("suffix") or "-jailbreak", "suffix")
     unmapped = str(raw.get("unmapped") or "error").strip().lower()
     default_mode = str(raw.get("default_mode") or "prepend").strip().lower()
-    if not suffix or any(char.isspace() for char in suffix):
-        raise PoolctlError("%s 的 suffix 不能为空且不能含空白，当前值: %r" % (JAILBREAK_MANIFEST, suffix))
+    default_position = str(raw.get("default_position") or "system").strip().lower()
     if unmapped not in ("error", "pass"):
         raise PoolctlError("%s 的 unmapped 只能是 error 或 pass" % JAILBREAK_MANIFEST)
     if default_mode not in JAILBREAK_MODES:
@@ -638,24 +700,69 @@ def load_jailbreak_config(root, channel):
             "%s 的 default_mode 必须是 %s，当前值: %r"
             % (JAILBREAK_MANIFEST, " / ".join(JAILBREAK_MODES), default_mode)
         )
+    if default_position not in JAILBREAK_POSITIONS:
+        raise PoolctlError(
+            "%s 的 default_position 必须是 %s，当前值: %r"
+            % (JAILBREAK_MANIFEST, " / ".join(JAILBREAK_POSITIONS), default_position)
+        )
 
     profiles_raw = raw.get("profiles")
     if not isinstance(profiles_raw, list) or not profiles_raw:
         raise PoolctlError("%s 的 profiles 必须是非空列表" % JAILBREAK_MANIFEST)
 
     prompts_dir = Path(root) / "prompts"
+    shared_overlay_rel = str(raw.get("shared_overlay") or "").strip()
+    shared_overlay = ""
+    if shared_overlay_rel:
+        shared_path = _prompt_path(prompts_dir, shared_overlay_rel, "shared_overlay")
+        if not shared_path.exists():
+            raise PoolctlError("破甲 shared_overlay 缺失: %s" % shared_path)
+        shared_overlay = _read_jailbreak_text(shared_path, "shared_overlay")
+
     compiled = []
     seen_names = set()
     for index, item in enumerate(profiles_raw, 1):
         label = "profiles[%d]" % index
         if not isinstance(item, dict):
             raise PoolctlError("%s 必须是映射(dict)" % label)
+        _reject_unknown_keys(
+            item,
+            {
+                "name",
+                "description",
+                "enabled",
+                "models",
+                "file",
+                "source_file",
+                "overlay",
+                "overlay_position",
+                "mode",
+                "position",
+                "position_fallback",
+                "depth",
+                "reminder",
+                "reminder_position",
+                "reminder_depth",
+                "reminder_mode",
+                "suffix",
+                "content_domain",
+                "adult_only",
+                "sha256",
+            },
+            label,
+        )
         name = str(item.get("name") or "profile-%d" % index).strip()
         if not name:
             raise PoolctlError("%s.name 不能为空" % label)
         if name in seen_names:
             raise PoolctlError("%s.name 重复: %s" % (label, name))
         seen_names.add(name)
+
+        enabled = item.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise PoolctlError("%s.enabled 必须是 bool" % label)
+        if not enabled:
+            continue
 
         models_raw = item.get("models")
         if isinstance(models_raw, str):
@@ -666,30 +773,66 @@ def load_jailbreak_config(root, channel):
         if not models:
             raise PoolctlError("%s.models 不能为空" % label)
 
+        profile_suffix = _validate_jailbreak_suffix(
+            item.get("suffix") or suffix, label + ".suffix"
+        )
+        content_domain = str(item.get("content_domain") or "jailbreak").strip().lower()
+        if content_domain not in JAILBREAK_DOMAINS:
+            raise PoolctlError(
+                "%s.content_domain 只能是 %s，当前值: %r"
+                % (label, " / ".join(JAILBREAK_DOMAINS), content_domain)
+            )
+        adult_only = item.get("adult_only", False)
+        if not isinstance(adult_only, bool):
+            raise PoolctlError("%s.adult_only 必须是 bool" % label)
+        if content_domain == "nsfw" and not adult_only:
+            raise PoolctlError("%s 是 nsfw，必须声明 adult_only: true" % label)
+        if content_domain != "nsfw" and adult_only:
+            raise PoolctlError("%s 不是 nsfw，不能声明 adult_only: true" % label)
+
+        position = str(item.get("position") or default_position).strip().lower()
+        if position not in JAILBREAK_POSITIONS:
+            raise PoolctlError(
+                "%s.position 只能是 %s，当前值: %r"
+                % (label, " / ".join(JAILBREAK_POSITIONS), position)
+            )
+        position_fallback = str(item.get("position_fallback") or "error").strip().lower()
+        if position_fallback not in JAILBREAK_FALLBACKS:
+            raise PoolctlError(
+                "%s.position_fallback 只能是 %s，当前值: %r"
+                % (label, " / ".join(JAILBREAK_FALLBACKS), position_fallback)
+            )
+        depth = item.get("depth", 0)
+        if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
+            raise PoolctlError("%s.depth 必须是 >= 0 的整数" % label)
+        if position != "in_chat" and depth != 0:
+            raise PoolctlError("%s 只有 position=in_chat 时才能设置 depth" % label)
+
         prompt_path = _prompt_path(prompts_dir, item.get("file"), label)
         if not prompt_path.exists():
             raise PoolctlError(
                 "破甲通道提示词缺失: %s\n先执行: python3 scripts/poolctl.py sync-jailbreaks"
                 % prompt_path
             )
-        prompt = prompt_path.read_text(encoding="utf-8").strip()
-        if not prompt:
-            raise PoolctlError("破甲通道提示词为空: %s" % prompt_path)
+        prompt = _read_jailbreak_text(prompt_path, label + ".file")
 
+        overlay_parts = []
+        if shared_overlay:
+            overlay_parts.append(shared_overlay)
         overlay_rel = str(item.get("overlay") or "").strip()
         if overlay_rel:
             overlay_path = _prompt_path(prompts_dir, overlay_rel, label + ".overlay")
             if not overlay_path.exists():
                 raise PoolctlError("破甲 prompt overlay 缺失: %s" % overlay_path)
-            overlay = overlay_path.read_text(encoding="utf-8").strip()
-            if not overlay:
-                raise PoolctlError("破甲 prompt overlay 为空: %s" % overlay_path)
+            overlay_parts.append(_read_jailbreak_text(overlay_path, label + ".overlay"))
+        if overlay_parts:
             overlay_position = str(item.get("overlay_position") or "prepend").strip().lower()
             if overlay_position not in ("prepend", "append"):
                 raise PoolctlError(
                     "%s.overlay_position 只能是 prepend 或 append，当前值: %r"
                     % (label, overlay_position)
                 )
+            overlay = "\n\n".join(overlay_parts)
             if overlay_position == "prepend":
                 prompt = overlay + "\n\n" + prompt
             else:
@@ -701,18 +844,66 @@ def load_jailbreak_config(root, channel):
                 "%s.mode 必须是 %s，当前值: %r"
                 % (label, " / ".join(JAILBREAK_MODES), mode)
             )
+        reminder = ""
+        reminder_position = "post_history"
+        reminder_depth = 0
+        reminder_mode = "append"
+        reminder_rel = str(item.get("reminder") or "").strip()
+        if reminder_rel:
+            reminder_path = _prompt_path(prompts_dir, reminder_rel, label + ".reminder")
+            if not reminder_path.exists():
+                raise PoolctlError("破甲 reminder 缺失: %s" % reminder_path)
+            reminder = _read_jailbreak_text(
+                reminder_path, label + ".reminder", max_bytes=MAX_JAILBREAK_REMINDER_BYTES
+            )
+            reminder_position = str(item.get("reminder_position") or "post_history").strip().lower()
+            if reminder_position not in JAILBREAK_POSITIONS:
+                raise PoolctlError(
+                    "%s.reminder_position 只能是 %s，当前值: %r"
+                    % (label, " / ".join(JAILBREAK_POSITIONS), reminder_position)
+                )
+            reminder_depth = item.get("reminder_depth", 0)
+            if isinstance(reminder_depth, bool) or not isinstance(reminder_depth, int) or reminder_depth < 0:
+                raise PoolctlError("%s.reminder_depth 必须是 >= 0 的整数" % label)
+            if reminder_position != "in_chat" and reminder_depth != 0:
+                raise PoolctlError("%s 只有 reminder_position=in_chat 时才能设置 reminder_depth" % label)
+            reminder_mode = str(item.get("reminder_mode") or "append").strip().lower()
+            if reminder_mode not in JAILBREAK_MODES:
+                raise PoolctlError(
+                    "%s.reminder_mode 必须是 %s，当前值: %r"
+                    % (label, " / ".join(JAILBREAK_MODES), reminder_mode)
+                )
+
         compiled.append(
             {
                 "name": name,
                 "models": models,
+                "suffix": profile_suffix,
+                "content_domain": content_domain,
+                "adult_only": adult_only,
                 "mode": mode,
+                "position": position,
+                "position_fallback": position_fallback,
+                "depth": depth,
                 "prompt": prompt,
+                "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                "reminder": reminder,
+                "reminder_position": reminder_position,
+                "reminder_depth": reminder_depth,
+                "reminder_mode": reminder_mode,
+                "reminder_sha256": (
+                    hashlib.sha256(reminder.encode("utf-8")).hexdigest() if reminder else ""
+                ),
             }
         )
+
+    if not compiled:
+        raise PoolctlError("%s 没有启用的 profile" % JAILBREAK_MANIFEST)
 
     return {
         "suffix": suffix,
         "unmapped": unmapped,
+        "default_position": default_position,
         "profiles": compiled,
     }
 
@@ -738,6 +929,7 @@ def sync_jailbreaks(root, force=False):
     prompts_dir = root / "prompts"
     written = 0
     skipped = 0
+    seen_dest = set()
     for index, item in enumerate(profiles, 1):
         if not isinstance(item, dict):
             raise PoolctlError("profiles[%d] 必须是映射(dict)" % index)
@@ -747,6 +939,11 @@ def sync_jailbreaks(root, force=False):
             skipped += 1
             continue
         dest = _prompt_path(prompts_dir, item.get("file"), "profiles[%d]" % index)
+        if dest in seen_dest:
+            _info("profiles[%d] 复用已下载文件，跳过: %s" % (index, dest.relative_to(root)))
+            skipped += 1
+            continue
+        seen_dest.add(dest)
         url = "%s/%s/%s/%s" % (
             base_url,
             repo,
@@ -800,21 +997,79 @@ def _jailbreak_model_matches(model, profiles):
     return False
 
 
-def _jailbreak_openai_model(model, profiles, suffix):
-    """给 OpenAI 兼容 model 条目复制一份带破甲后缀的 alias。"""
+def _jailbreak_route_names(include_goat=False):
+    """返回实际会出现在路由表里的客户端模型名。"""
+    names = []
+    model_groups = [list(OC2API_GO_MODELS)]
+    if include_goat:
+        model_groups.append(list(GOAT_MODELS))
+    for models in model_groups:
+        for model in models:
+            client_name = str(model.get("alias") or model.get("name") or "").strip()
+            if client_name:
+                names.append(client_name)
+    names.extend(DEVIN_MODELS)
+    return names
+
+
+def _validate_jailbreak_routes(jailbreak, include_goat=False):
+    """校验同一基座模型的多个破甲后缀不会生成冲突别名。"""
+    profiles = jailbreak["profiles"]
+    default_suffix = jailbreak["suffix"]
+    route_names = _jailbreak_route_names(include_goat)
+    base_names = {name.lower() for name in route_names}
+    owners = {}
+    for name in route_names:
+        for profile in profiles:
+            if not _jailbreak_model_matches(name, [profile]):
+                continue
+            suffix = _jailbreak_profile_suffix(profile, default_suffix)
+            alias = name + suffix
+            key = alias.lower()
+            if key in base_names:
+                raise PoolctlError("破甲别名与真实模型名冲突: %s" % alias)
+            if key in owners and owners[key] != profile["name"]:
+                raise PoolctlError(
+                    "破甲别名冲突: %s 同时来自 %s 和 %s"
+                    % (alias, owners[key], profile["name"])
+                )
+            owners[key] = profile["name"]
+    for name in route_names:
+        lower = name.lower()
+        for profile in profiles:
+            suffix = _jailbreak_profile_suffix(profile, default_suffix)
+            if lower.endswith(suffix.lower()):
+                raise PoolctlError(
+                    "真实模型名 %s 以破甲后缀 %s 结尾，无法区分别名"
+                    % (name, suffix)
+                )
+    return owners
+
+
+def _jailbreak_openai_models(model, jailbreak):
+    """给 OpenAI 兼容 model 条目按 profile 复制带破甲后缀的 alias。"""
     client_name = str(model.get("alias") or model.get("name") or "").strip()
-    if not _jailbreak_model_matches(client_name, profiles):
-        return None
-    aliased = dict(model)
-    aliased["alias"] = client_name + suffix
-    return aliased
+    if not client_name:
+        return []
+    aliases = []
+    for profile in jailbreak["profiles"]:
+        if not _jailbreak_model_matches(client_name, [profile]):
+            continue
+        suffix = _jailbreak_profile_suffix(profile, jailbreak["suffix"])
+        aliased = dict(model)
+        aliased["alias"] = client_name + suffix
+        aliases.append(aliased)
+    return aliases
 
 
-def _jailbreak_oauth_aliases(profiles, suffix):
+def _jailbreak_oauth_aliases(jailbreak):
     """Devin OAuth 模型的破甲别名；fork=true 保留原模型。"""
     aliases = []
     for model in DEVIN_MODELS:
-        if _jailbreak_model_matches(model, profiles):
+        for profile in jailbreak["profiles"]:
+            if not _jailbreak_model_matches(model, [profile]):
+                continue
+            suffix = _jailbreak_profile_suffix(profile, jailbreak["suffix"])
             aliases.append({"name": model, "alias": model + suffix, "fork": True})
     return aliases
 
@@ -824,34 +1079,92 @@ def _models_with_jailbreak(models, jailbreak):
     if not jailbreak:
         return result
     for model in models:
-        aliased = _jailbreak_openai_model(model, jailbreak["profiles"], jailbreak["suffix"])
-        if aliased:
+        result.extend(_jailbreak_openai_models(model, jailbreak))
+    return result
+
+
+def _models_with_client_aliases(models):
+    """给基座模型追加仅用于路由、不对外展示的客户端兼容别名。"""
+    result = [dict(model) for model in models]
+    for model in models:
+        client_name = str(model.get("alias") or model.get("name") or "").strip()
+        if client_name != CLIENT_COMPAT_BASE_ALIAS:
+            continue
+        for alias in CLIENT_COMPAT_ALIASES:
+            aliased = dict(model)
+            aliased["alias"] = alias
             result.append(aliased)
     return result
 
 
-def _jailbreak_alias_names(jailbreak):
+def _jailbreak_alias_names(jailbreak, include_goat=False):
     """实际会出现在 /v1/models 里的破甲模型名（去重、保持顺序）。"""
     names = []
     if not jailbreak:
         return names
-    profiles = jailbreak["profiles"]
-    suffix = jailbreak["suffix"]
-    for model in list(OC2API_GO_MODELS) + list(GOAT_MODELS):
-        client_name = str(model.get("alias") or model.get("name") or "").strip()
-        if client_name and _jailbreak_model_matches(client_name, profiles):
-            alias = client_name + suffix
-            if alias not in names:
-                names.append(alias)
-    for model in DEVIN_MODELS:
-        if _jailbreak_model_matches(model, profiles):
+    for model in _jailbreak_route_names(include_goat):
+        for profile in jailbreak["profiles"]:
+            if not _jailbreak_model_matches(model, [profile]):
+                continue
+            suffix = _jailbreak_profile_suffix(profile, jailbreak["suffix"])
             alias = model + suffix
             if alias not in names:
                 names.append(alias)
     return names
 
 
+def _public_model_entries(jailbreak, include_goat=False, include_devin=False):
+    """render 出来的公开模型表：排除只在 CPA 内部用于兼容的路由别名。"""
+    entries = []
+    seen = set()
+    hidden = {name.lower() for name in CLIENT_COMPAT_ALIASES}
+
+    def add(name, owner):
+        name = str(name or "").strip()
+        key = name.lower()
+        if not name or key in hidden or key in seen:
+            return
+        seen.add(key)
+        entries.append(
+            {
+                "created": 0,
+                "id": name,
+                "object": "model",
+                "owned_by": owner,
+            }
+        )
+
+    def add_openai_group(models, owner):
+        for model in models:
+            client_name = str(model.get("alias") or model.get("name") or "").strip()
+            add(client_name, owner)
+            if not jailbreak:
+                continue
+            for profile in jailbreak["profiles"]:
+                if not _jailbreak_model_matches(client_name, [profile]):
+                    continue
+                suffix = _jailbreak_profile_suffix(profile, jailbreak["suffix"])
+                add(client_name + suffix, owner)
+
+    add_openai_group(OC2API_GO_MODELS, "opencode-go-pool")
+    if include_goat:
+        add_openai_group(GOAT_MODELS, "command-code-goat")
+    if include_devin:
+        for model in DEVIN_MODELS:
+            add(model, "devin")
+            if not jailbreak:
+                continue
+            for profile in jailbreak["profiles"]:
+                if not _jailbreak_model_matches(model, [profile]):
+                    continue
+                suffix = _jailbreak_profile_suffix(profile, jailbreak["suffix"])
+                add(model + suffix, "devin")
+    return entries
+
+
 def _build_cliproxy_config(env, mode, words, goat_keys, go_keys, monitor, jailbreak=None):
+    if jailbreak:
+        _validate_jailbreak_routes(jailbreak, include_goat=bool(goat_keys))
     # DISABLE_AUTH=true（.env，测试环境用）：access.api-keys 留空 = 客户端免鉴权。
     # 管理接口仍走 CPA_ADMIN_SECRET（secret-key 置空会把 /v0/management 整个关掉）。
     access_keys = [] if _env_flag(env, "DISABLE_AUTH") else [env["MASTER_API_KEY"]]
@@ -918,7 +1231,9 @@ def _build_cliproxy_config(env, mode, words, goat_keys, go_keys, monitor, jailbr
                     "name": "opencode-go-pool",
                     "base-url": "http://opencode2api:8080/v1",
                     "support-prompt-cache-key": True,
-                    "models": _models_with_jailbreak(OC2API_GO_MODELS, jailbreak),
+                    "models": _models_with_jailbreak(
+                        _models_with_client_aliases(OC2API_GO_MODELS), jailbreak
+                    ),
                     "keys": [{"api-key": env["OC2API_SERVER_KEY"], "weight": 1}],
                 }
             ]
@@ -926,7 +1241,7 @@ def _build_cliproxy_config(env, mode, words, goat_keys, go_keys, monitor, jailbr
     }
 
     if jailbreak:
-        oauth_aliases = _jailbreak_oauth_aliases(jailbreak["profiles"], jailbreak["suffix"])
+        oauth_aliases = _jailbreak_oauth_aliases(jailbreak)
         if oauth_aliases:
             config["oauth-model-alias"] = {"devin": oauth_aliases}
 
@@ -936,7 +1251,9 @@ def _build_cliproxy_config(env, mode, words, goat_keys, go_keys, monitor, jailbr
                 "name": "command-code-goat",
                 "base-url": "https://api.commandcode.ai/provider/v1",
                 "support-prompt-cache-key": True,
-                "models": _models_with_jailbreak(GOAT_MODELS, jailbreak),
+                "models": _models_with_jailbreak(
+                    _models_with_client_aliases(GOAT_MODELS), jailbreak
+                ),
                 "keys": [{"api-key": item["api_key"], "weight": item["weight"]} for item in goat_keys],
             }
         )
@@ -964,6 +1281,7 @@ def _build_cliproxy_config(env, mode, words, goat_keys, go_keys, monitor, jailbr
             "priority": 2,
             "suffix": jailbreak["suffix"],
             "unmapped": jailbreak["unmapped"],
+            "default_position": jailbreak.get("default_position", "system"),
             "profiles": jailbreak["profiles"],
         }
 
@@ -997,9 +1315,6 @@ upstream orca_cpa {
     server 127.0.0.1:%(internal_port)s;
     keepalive 64;
 }
-
-proxy_cache_path /var/cache/nginx/orca levels=1:2 keys_zone=orca_meta:16m
-                 max_size=256m inactive=10m use_temp_path=off;
 
 # 管理面公共片段：限流 + 真实来源透传（CPA 无 trusted-proxies，自己记不到）
 server {
@@ -1054,16 +1369,21 @@ server {
         return 404;
     }
 
-    # --- 元数据：短缓存 + 在途合并（防冷启动惊群）；纯缓存，不是限流 ---
+    # --- 元数据：CPA 只校验 Bearer key，模型表用 render 产物对外展示 ---
+    location = /_orca_models_auth {
+        internal;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Authorization $http_authorization;
+        proxy_method GET;
+        proxy_pass http://orca_cpa/v1/models;
+    }
+
     location = /v1/models {
-        proxy_cache            orca_meta;
-        proxy_cache_key        "$scheme$request_method$host$uri";
-        proxy_cache_lock       on;
-        proxy_cache_lock_timeout 30s;
-        proxy_cache_valid      200 60s;
-        proxy_cache_use_stale  updating error timeout;
-        add_header X-Cache-Status $upstream_cache_status always;
-        proxy_pass http://orca_cpa;
+        auth_request /_orca_models_auth;
+        alias /etc/nginx/orca-models.json;
+        default_type application/json;
+        add_header Cache-Control "no-store" always;
     }
 
     # --- 模型面：不做任何速率/并发限制（限流会误伤重试与并行子 agent）---
@@ -1126,15 +1446,20 @@ server {
         return 404;
     }
 
+    location = /_orca_models_auth {
+        internal;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Authorization $http_authorization;
+        proxy_method GET;
+        proxy_pass http://orca_cpa/v1/models;
+    }
+
     location = /v1/models {
-        proxy_cache            orca_meta;
-        proxy_cache_key        "$scheme$request_method$host$uri";
-        proxy_cache_lock       on;
-        proxy_cache_lock_timeout 30s;
-        proxy_cache_valid      200 60s;
-        proxy_cache_use_stale  updating error timeout;
-        add_header X-Cache-Status $upstream_cache_status always;
-        proxy_pass http://orca_cpa;
+        auth_request /_orca_models_auth;
+        alias /etc/nginx/orca-models.json;
+        default_type application/json;
+        add_header Cache-Control "no-store" always;
     }
 
     location / {
@@ -1347,6 +1672,38 @@ def _sync_opencode2api_container(root, config_path, env):
         _warn("docker compose cp 失败: %s" % exc)
         _info("请手工执行: docker compose restart opencode2api")
         return
+    # docker compose cp 以 root 写入，容器内的应用进程通常不是 root；
+    # 不同步属主会让 /api/config/reload 报 permission denied。
+    try:
+        owner = subprocess.run(
+            [
+                "docker", "exec", "-u", "0", OC2API_SERVICE,
+                "stat", "-c", "%u:%g", "/var/lib/opencode2api",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout.strip()
+        permission_cmd = (
+            ["chown", owner, OC2API_CONTAINER_CONFIG_PATH]
+            if owner
+            else ["chmod", "0644", OC2API_CONTAINER_CONFIG_PATH]
+        )
+        fixed = subprocess.run(
+            ["docker", "exec", "-u", "0", OC2API_SERVICE] + permission_cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if fixed.returncode != 0:
+            raise RuntimeError(_short((fixed.stderr or fixed.stdout or "").strip(), 300))
+    except Exception as exc:
+        _warn("修正容器内配置权限失败: %s" % exc)
+        _info(
+            "请手工执行: docker exec -u 0 %s chmod 0644 %s"
+            % (OC2API_SERVICE, OC2API_CONTAINER_CONFIG_PATH)
+        )
+        return
     try:
         _webui_reload(env)
     except Exception as exc:
@@ -1391,6 +1748,25 @@ def _remove_stale_auth_files(auths_dir, expected_devin, expected_go):
             )
         except OSError as exc:
             _warn("删除过期凭据失败 %s: %s" % (stale, exc))
+
+
+def _sync_nginx_models(source):
+    """把公开模型表同步到 nginx 读取的位置；非 root / 未装 nginx 时只提示。"""
+    dest = Path("/etc/nginx/orca-models.json")
+    if not dest.parent.is_dir():
+        return False
+    text = Path(source).read_text(encoding="utf-8")
+    try:
+        if dest.is_file() and dest.read_text(encoding="utf-8") == text:
+            return False
+        atomic_write_text(dest, text, mode=0o644)
+    except PermissionError:
+        _warn(
+            "无法写入 %s（权限不足）；部署机上请执行 "
+            "sudo bash scripts/install-nginx.sh 同步公开模型表" % dest
+        )
+        return False
+    return True
 
 
 def render(root):
@@ -1551,14 +1927,39 @@ def render(root):
     _ok("已生成 %s (config-version 8, mode=%s)" % (cliproxy_path.relative_to(root), mode))
     if jailbreak:
         _ok(
-            "破甲通道已启用: 后缀 %s，profiles=%d（%s）"
+            "破甲通道已启用: 默认后缀 %s，profiles=%d（%s）"
             % (
                 jailbreak["suffix"],
                 len(jailbreak["profiles"]),
                 " / ".join(item["name"] for item in jailbreak["profiles"]),
             )
         )
-        _info("新增模型别名: %s" % ", ".join(_jailbreak_alias_names(jailbreak)))
+        for item in jailbreak["profiles"]:
+            _info(
+                "profile %s: suffix=%s domain=%s position=%s mode=%s sha256=%s"
+                % (
+                    item["name"],
+                    item["suffix"],
+                    item["content_domain"],
+                    item["position"],
+                    item["mode"],
+                    item["prompt_sha256"][:12],
+                )
+            )
+            if item.get("reminder"):
+                _info(
+                    "  reminder: position=%s mode=%s bytes=%d sha256=%s"
+                    % (
+                        item["reminder_position"],
+                        item["reminder_mode"],
+                        len(item["reminder"].encode("utf-8")),
+                        item["reminder_sha256"][:12],
+                    )
+                )
+        _info(
+            "新增模型别名: %s"
+            % ", ".join(_jailbreak_alias_names(jailbreak, include_goat=bool(goat_keys)))
+        )
     else:
         _info("破甲通道未启用（accounts.yaml 的 jailbreak_channel.enabled=false）")
 
@@ -1577,11 +1978,25 @@ def render(root):
     nginx_dir.mkdir(parents=True, exist_ok=True)
     nginx_path = nginx_dir / "orca.conf"
     atomic_write_text(nginx_path, _build_nginx_conf(env))
+    models_path = root / "nginx" / "models.json"
+    atomic_write_json(
+        models_path,
+        {
+            "object": "list",
+            "data": _public_model_entries(
+                jailbreak,
+                include_goat=bool(goat_keys),
+                include_devin=bool(accounts),
+            ),
+        },
+    )
+    if _sync_nginx_models(models_path):
+        _ok("已同步 /etc/nginx/orca-models.json")
     snippet_dir = root / "nginx" / "snippets"
     snippet_dir.mkdir(parents=True, exist_ok=True)
     atomic_write_text(snippet_dir / "orca-proxy.conf", NGINX_SNIPPET)
     _ok(
-        "已生成 %s (公网 :%s + TLS 443 → CPA :%s，仅管理面限流)"
+        "已生成 %s / models.json (公网 :%s + TLS 443 → CPA :%s，仅管理面限流)"
         % (
             nginx_path.relative_to(root),
             env.get("GATEWAY_PORT") or DEFAULT_GATEWAY_PORT,
