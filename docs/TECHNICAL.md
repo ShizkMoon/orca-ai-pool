@@ -118,6 +118,16 @@ opencode2api 只在 state 卷为空时导入 `CONFIG_SEED_PATH`。因此修改�
 
 `poolctl render` 在容器运行时自动完成上述步骤。直接 `docker compose restart` 不会重新导入新种子。
 
+请求体上限：
+
+- 官方 `opencode2api v1.4.4` 在 `internal/gateway/gateway.go` 硬编码
+  `maxRequestBody = 32 << 20`，超过后返回
+  `request body is too large or unreadable`。
+- 本仓库用 [opencode2api-unlimited-request-body.patch](../patches/opencode2api-unlimited-request-body.patch)
+  去掉该读取上限，构建 `orca-opencode2api:v1.4.4-unlimited`。
+- nginx 使用 `client_max_body_size 0`，CPA 显式设置
+  `server.max-request-body-bytes: 0`，因此整条链路不再有应用层 body 上限。
+
 ### CPA 插件重载
 
 CPA 的普通 YAML 配置通过 fsnotify 热载；C ABI 插件的 `plugins.configs` 只在进程启动时应用。
@@ -307,8 +317,14 @@ system 作为稳定前缀，短 reminder 放 post_history，避免每个请求�
 | `CPA_ADMIN_SECRET` | CPAMC 管理接口 | `poolctl rotate-secret admin` |
 | `OC2API_SERVER_KEY` | CPA 到 opencode2api | `poolctl rotate-secret server` |
 | `OC2API_WEBUI_PASSWORD` | opencode2api WebUI | `poolctl rotate-secret webui` |
+| `EXTRA_API_KEYS` | 额外客户端 key（逗号分隔，可多把） | `poolctl rotate-secret --extra` |
 
-`rotate-secret all` 会同时轮换以上四项。轮换后需要重新 `render`；涉及 server key 时还要重启两个服务。
+`rotate-secret all` 会同时轮换前四项。`EXTRA_API_KEYS` 里的 key 与 `MASTER_API_KEY`
+权限完全相同，CPA 的 `access.api-keys` 不区分模型范围，只做「是否放行」；需要按 key
+限制模型时只能在入口层（nginx `map`/`auth_request`）或插件里做。单独执行
+`rotate-secret --extra` 只追加/覆盖专用 key，不动主 key。有任何 key 变更后都要重新
+`render` 并重启 `cliproxyapi`（`access.api-keys` 不在热载范围内）；涉及 server key 时还要
+重启两个服务。
 
 ### 权限
 

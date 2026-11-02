@@ -18,7 +18,12 @@
 
 services:
   opencode2api:
-    image: ghcr.io/jasonxu114514/opencode2api:latest
+    image: orca-opencode2api:v1.4.4-unlimited
+    build:
+      context: .
+      dockerfile: docker/opencode2api.Dockerfile
+      args:
+        OPENCODE2API_VERSION: v1.4.4
     container_name: opencode2api
     restart: unless-stopped
     # 8080 为 API（仅供内网 cliproxyapi 调用，不发布）；8081 为 WebUI，仅回环。

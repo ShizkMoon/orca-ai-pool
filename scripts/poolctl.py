@@ -562,6 +562,12 @@ WEAK_SECRET_MARKERS = (
 MIN_SECRET_LEN = 24
 
 
+def _access_key_list(env, name="EXTRA_API_KEYS"):
+    """解析额外访问 key（.env 里逗号/空白分隔），保持书写顺序。"""
+    raw = str(env.get(name) or "")
+    return [item for item in re.split(r"[,\s]+", raw) if item]
+
+
 def _secret_problems(env):
     """列出 .env 里弱/复用/过短的密钥。返回 [(键名, 原因)]。"""
     problems = []
@@ -573,19 +579,26 @@ def _secret_problems(env):
         "OC2API_SERVER_KEY",
         "OC2API_WEBUI_PASSWORD",
     ]
+    if not _env_flag(env, "DISABLE_AUTH"):
+        # 额外访问 key 同样进强度/复用校验，避免有人拿示例值当专用 key。
+        extra = _access_key_list(env)
+        if extra:
+            keys.append("EXTRA_API_KEYS")
     for key in keys:
-        value = str(env.get(key) or "").strip()
-        if not value:
-            problems.append((key, "为空"))
-            continue
-        if value.lower() in WEAK_SECRET_VALUES:
-            problems.append((key, "是已知默认值"))
-        elif any(marker in value.lower() for marker in WEAK_SECRET_MARKERS):
-            problems.append((key, "仍是示例占位值"))
-        elif len(value) < MIN_SECRET_LEN:
-            problems.append((key, "长度 %d < %d" % (len(value), MIN_SECRET_LEN)))
-        if value:
-            seen.setdefault(value, []).append(key)
+        values = _access_key_list(env) if key == "EXTRA_API_KEYS" else [str(env.get(key) or "")]
+        for value in values:
+            value = value.strip()
+            if not value:
+                problems.append((key, "为空"))
+                continue
+            if value.lower() in WEAK_SECRET_VALUES:
+                problems.append((key, "是已知默认值"))
+            elif any(marker in value.lower() for marker in WEAK_SECRET_MARKERS):
+                problems.append((key, "仍是示例占位值"))
+            elif len(value) < MIN_SECRET_LEN:
+                problems.append((key, "长度 %d < %d" % (len(value), MIN_SECRET_LEN)))
+            if value:
+                seen.setdefault(value, []).append(key)
     for value, owners in seen.items():
         if len(owners) > 1:
             problems.append((" / ".join(owners), "复用了同一个密钥"))
@@ -1167,7 +1180,10 @@ def _build_cliproxy_config(env, mode, words, goat_keys, go_keys, monitor, jailbr
         _validate_jailbreak_routes(jailbreak, include_goat=bool(goat_keys))
     # DISABLE_AUTH=true（.env，测试环境用）：access.api-keys 留空 = 客户端免鉴权。
     # 管理接口仍走 CPA_ADMIN_SECRET（secret-key 置空会把 /v0/management 整个关掉）。
-    access_keys = [] if _env_flag(env, "DISABLE_AUTH") else [env["MASTER_API_KEY"]]
+    # EXTRA_API_KEYS：专用 key 列表（逗号/空白分隔），与主 key 并列，权限完全相同。
+    access_keys = (
+        [] if _env_flag(env, "DISABLE_AUTH") else [env["MASTER_API_KEY"]] + _access_key_list(env)
+    )
     config = {
         "config-version": 8,
         # 公网口由 nginx 前置，管理面才能被限流；CPA 只监听内部端口。
@@ -1178,6 +1194,9 @@ def _build_cliproxy_config(env, mode, words, goat_keys, go_keys, monitor, jailbr
             "port": _int_env(
                 env, "GATEWAY_INTERNAL_PORT", DEFAULT_INTERNAL_PORT
             ),
+            # 0 means no limit. Keep this explicit so request-body growth does
+            # not silently reintroduce a proxy-side cap.
+            "max-request-body-bytes": 0,
         },
         "management": {"allow-remote": True, "secret-key": env["CPA_ADMIN_SECRET"]},
         "access": {"api-keys": access_keys},
@@ -1479,7 +1498,8 @@ proxy_set_header X-Real-IP         $remote_addr;
 proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
 
-client_max_body_size 64m;
+# 0 disables nginx's body-size check. opencode2api is patched to match.
+client_max_body_size 0;
 
 # SSE 长流：全链路不缓冲
 proxy_buffering    off;
@@ -2674,10 +2694,11 @@ def export_client(root):
 # ---------------------------------------------------------------------------
 
 
-def rotate_secret(root, which):
+def rotate_secret(root, which, rotate_extra=False):
     """生成强随机密钥写回 .env，并备份原文件。不自动 render。
 
     which = all | admin | master | server | webui
+    rotate_extra = True 时额外签发一把专用 key 写入 EXTRA_API_KEYS。
     """
     root = Path(root)
     env_path = root / ".env"
@@ -2690,6 +2711,10 @@ def rotate_secret(root, which):
         "webui": ("OC2API_WEBUI_PASSWORD", "sk-"),
     }
     targets = list(mapping) if which in (None, "all") else [which]
+    if rotate_extra and which is None:
+        # rotate-secret --extra 单独使用时只追加专用 key，不顺手轮换主 key 与管理/内网
+        # 密钥；显式指定目标（如 master --extra）时才同时轮换。
+        targets = []
     for name in targets:
         if name not in mapping:
             raise PoolctlError(
@@ -2712,6 +2737,17 @@ def rotate_secret(root, which):
         updated = pattern.sub(lambda m: m.group(1) + new_value, updated)
         changed.append(key)
 
+    extra_key = None
+    if rotate_extra:
+        # 专用 key 与主 key 互不覆盖：追加一条，旧 key 失效前请先确认已无客户端在用。
+        extra_key = "sk-" + secrets.token_hex(24)
+        pattern = re.compile(r"^(EXTRA_API_KEYS=).*$", re.MULTILINE)
+        if pattern.search(updated):
+            updated = pattern.sub(lambda m: m.group(1) + extra_key, updated)
+        else:
+            updated = updated.rstrip("\n") + "\nEXTRA_API_KEYS=%s\n" % extra_key
+        changed.append("EXTRA_API_KEYS")
+
     atomic_write_text(
         env_path,
         updated,
@@ -2719,6 +2755,9 @@ def rotate_secret(root, which):
     )
     for key in changed:
         _ok("已轮换 %s（192 bit）" % key)
+    if extra_key:
+        _emit("")
+        _emit("新专用 key: %s" % extra_key)
     _info("原文件备份: %s" % backup)
     if "OC2API_SERVER_KEY" in changed:
         _warn("内网 key 变更后需重启 cliproxyapi 与 opencode2api，否则两端认证会不一致")
@@ -2766,9 +2805,15 @@ def build_parser():
     rotate_parser.add_argument(
         "which",
         nargs="?",
-        default="all",
+        default=None,
         choices=["all", "admin", "master", "server", "webui"],
-        help="轮换哪个密钥（all/admin/master/server/webui），默认 all",
+        help="轮换哪个密钥（all/admin/master/server/webui），默认 all；单独配 --extra 时默认只追加专用 key",
+    )
+    rotate_parser.add_argument(
+        "--extra",
+        action="store_true",
+        dest="rotate_extra",
+        help="额外签发一把专用访问 key，追加到 .env 的 EXTRA_API_KEYS（不动主 key）",
     )
     rotate_parser.add_argument("--repo", metavar="DIR", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     rotate_parser.set_defaults(handler="rotate-secret")
@@ -2803,7 +2848,7 @@ def main(argv=None):
         if args.handler == "switch-mode":
             return switch_mode(root, args.mode, force=args.force)
         if args.handler == "rotate-secret":
-            return rotate_secret(root, args.which)
+            return rotate_secret(root, args.which, rotate_extra=args.rotate_extra)
         if args.handler == "export-client":
             return export_client(root)
         if args.handler == "sync-jailbreaks":

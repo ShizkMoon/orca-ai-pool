@@ -103,7 +103,9 @@ cd plugin/jailbreak-inject && make install && cd ../..
 python3 scripts/poolctl.py render
 # 若栈已经在跑：docker compose restart cliproxyapi；首次部署直接走第 4 步
 
-# 4. 起栈
+# 4. 构建自定义 opencode2api 并起栈
+#    官方 v1.4.4 在 gateway 里硬编码 32 MiB 请求体上限；本仓库的 patch 去掉该限制。
+docker compose build opencode2api
 docker compose up -d
 # 安装 nginx 入口（配置来自 render 产物；首次会生成自签证书）
 sudo bash scripts/install-nginx.sh

@@ -146,6 +146,8 @@ CPAMC 管理面板地址为 `http://<服务器>:8317/management.html`，密码�
 - `.env`、`accounts.yaml`、`cliproxy/auths/*.json` 必须保持私有权限。
 - `poolctl render` 默认把生成产物写成 `0600`，并将 `auths/` 目录收紧到 `0700`。
 - 管理面板与主 API 使用不同密钥；生产环境保持 `DISABLE_AUTH=false`。
+- 给单个应用发专用 key：`python3 scripts/poolctl.py rotate-secret --extra` 追加到
+  `.env` 的 `EXTRA_API_KEYS`（与主 key 同权限，可独立吊销），然后 `render` 并重启 `cliproxyapi`。
 - 轮换 `OC2API_SERVER_KEY` 后，需要同时重启 `cliproxyapi` 和 `opencode2api`。
 
 ### OpenCode Go 风控
@@ -196,6 +198,8 @@ orca-ai-pool/
 ├── README.md                  # 本说明文档
 ├── DEPLOY.md                  # 部署与运维 runbook
 ├── docker-compose.yml         # CPA + opencode2api + 网络
+├── docker/                    # 自定义 opencode2api 镜像构建文件
+├── patches/                   # 固定上游版本的构建补丁
 ├── accounts.example.yaml      # 号池清单模板
 ├── .env.example               # 部署参数模板
 ├── .github/workflows/ci.yml   # 测试、构建与 Compose 校验
@@ -214,3 +218,7 @@ orca-ai-pool/
 ```
 
 `cliproxy/`、`opencode2api/config.json`、`nginx/`、`export/` 均由工具生成，通常不提交。
+
+`opencode2api` 使用本仓库构建的 `orca-opencode2api:v1.4.4-unlimited`，保留上游
+`v1.4.4` 行为，只移除其 32 MiB 请求体硬限制。更新上游版本时同步修改
+`docker/opencode2api.Dockerfile` 的 `OPENCODE2API_VERSION` 并重新 `docker compose build`。

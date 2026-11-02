@@ -614,6 +614,11 @@ class ConfigSafetyTests(unittest.TestCase):
             models[0]["thinking"]["levels"],
             ["none", "low", "high", "max"],
         )
+        self.assertEqual(config["server"]["max-request-body-bytes"], 0)
+
+    def test_generated_nginx_disables_body_size_limit(self):
+        self.assertIn("client_max_body_size 0;", poolctl.NGINX_SNIPPET)
+        self.assertNotIn("client_max_body_size 64m;", poolctl.NGINX_SNIPPET)
 
 
 class RotateSecretTests(unittest.TestCase):
@@ -627,6 +632,48 @@ class RotateSecretTests(unittest.TestCase):
             after = poolctl.parse_env_file(root / ".env")["OC2API_SERVER_KEY"]
             self.assertNotEqual(after, before)
             self.assertEqual(stat.S_IMODE((root / ".env").stat().st_mode), 0o600)
+
+    def test_rotate_extra_appends_dedicated_key_without_touching_master(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_repo(root)
+            master = poolctl.parse_env_file(root / ".env")["MASTER_API_KEY"]
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    poolctl.rotate_secret(root, None, rotate_extra=True), 0
+                )
+            env = poolctl.parse_env_file(root / ".env")
+            self.assertEqual(env["MASTER_API_KEY"], master)
+            extra = poolctl._access_key_list(env)
+            self.assertEqual(len(extra), 1)
+            self.assertTrue(extra[0].startswith("sk-"))
+            self.assertNotEqual(extra[0], master)
+            # 再签一次只覆盖，不叠加
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    poolctl.rotate_secret(root, None, rotate_extra=True), 0
+                )
+            again = poolctl._access_key_list(poolctl.parse_env_file(root / ".env"))
+            self.assertEqual(len(again), 1)
+            self.assertNotEqual(again[0], extra[0])
+
+
+class ExtraAccessKeyTests(unittest.TestCase):
+    def test_extra_keys_are_rendered_into_access(self):
+        env = CliproxyPluginConfigTests()._env()
+        env["EXTRA_API_KEYS"] = "sk-dedicated-1, sk-dedicated-2"
+        config = poolctl._build_cliproxy_config(
+            env, "pro-only", [], [], [], {"enabled": False}, None
+        )
+        self.assertEqual(
+            config["access"]["api-keys"],
+            ["sk-test-master", "sk-dedicated-1", "sk-dedicated-2"],
+        )
+
+    def test_weak_extra_key_is_flagged(self):
+        env = {"MASTER_API_KEY": "sk-" + "a" * 48, "EXTRA_API_KEYS": "sk-change-me"}
+        owners = {owner for owner, _reason in poolctl._secret_problems(env)}
+        self.assertIn("EXTRA_API_KEYS", owners)
 
 
 class SwitchModeTests(unittest.TestCase):
