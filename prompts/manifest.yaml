@@ -82,6 +82,21 @@ profiles:
     reminder_depth: 1
     reminder_mode: "append"
 
+  - name: "devin-swe-2-imp"
+    description: "SWE-2 破甲：非人格化运行层（沙箱运行契约 + 输出预算 + 三条边界），不写人格"
+    suffix: "-imp"
+    content_domain: "jailbreak"
+    models:
+      - "devin/swe-2"
+      - "devin/swe-2-lightning"
+    source_file: "local/devin-swe-2-impersonal.md"
+    file: "local/devin-swe-2-impersonal.md"
+    position: "system"
+    mode: "append"
+    reminder: "overlays/reminder-jailbreak.md"
+    reminder_position: "post_history"
+    reminder_mode: "append"
+
   # Devin 还没上线，先不生成 devin/*-jailbreak 别名。上线后取消注释即可。
   # - name: "gemini-4-argon"
   #   suffix: "-jailbreak"
