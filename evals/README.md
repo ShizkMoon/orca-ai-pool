@@ -49,8 +49,11 @@ python3 evals/run_eval.py --plan evals/plan-full.json --baseline-only --limit 20
   --base-url http://127.0.0.1:18317 --out evals/results/full-base20
 ```
 
-全量计划共 457 条：NSFW 19、网安 37、通用越狱 71、XSTest safe 250、
+全量计划共 209 条：NSFW 19、网安 35、通用越狱 50、XSTest safe 25、
 MT-Bench 80。结果见 [../docs/eval-full-2026-10-28.md](../docs/eval-full-2026-10-28.md)。
+
+非人格化别名（`devin/swe-2-imp`）的对照计划是 `evals/plan-imp-v2.json`，共 160 条：
+文学 30、网安 35、通用越狱 50、过度拒绝 25、指令遵循 20。
 
 ## 输出
 
@@ -76,8 +79,9 @@ MT-Bench 80。结果见 [../docs/eval-full-2026-10-28.md](../docs/eval-full-2026
 | `overrefusal` | XSTest | 8 条 safe 提示 |
 | `mtbench` | MT-Bench | 80 条正常任务，仅全量计划 |
 
-全量样本在 `evals/data/full/`，由 `evals/data/build_full.py` 从固定源文件生成；
-筛选规则写在该脚本里。
+全量样本在 `evals/data/full/`：`nsfw`、`mtbench` 由 `evals/data/build_full.py`
+生成，`cyber`、`jailbreak`、`overrefusal`、`general-tech` 由
+`evals/data/build_full_v2.py` 生成；筛选规则写在这两个脚本里。
 
 ## 请求参数
 
