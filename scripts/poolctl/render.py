@@ -312,7 +312,8 @@ def _sync_nginx_models(source):
 class RenderPlan:
     """一次 render 的纯计算产物：要写哪些文件、内容是什么。
 
-    这里不碰文件系统，也不打印任何东西；落盘与提示全部交给 :func:`apply`。
+    只读输入（accounts.yaml / .env / manifest / 提示词正文 / 插件探测），不写任何产物；
+    缺 .env 等情况下仍可能有告警输出。落盘交给 :func:`apply`。
     """
 
     root: Path
@@ -493,20 +494,20 @@ def plan(root):
     )
 
 
-def apply(plan):
+def apply(render_plan):
     """把 :func:`plan` 的产物落盘，并触发容器/插件重载。"""
-    root = plan.root
-    env = plan.env
-    mode = plan.mode
-    accounts = plan.accounts
-    go_keys = plan.go_keys
-    proxies = plan.proxies
-    goat_keys = plan.goat_keys
-    words = plan.words
-    jailbreak = plan.jailbreak
+    root = render_plan.root
+    env = render_plan.env
+    mode = render_plan.mode
+    accounts = render_plan.accounts
+    go_keys = render_plan.go_keys
+    proxies = render_plan.proxies
+    goat_keys = render_plan.goat_keys
+    words = render_plan.words
+    jailbreak = render_plan.jailbreak
 
     _warn_private_file_permissions(root)
-    for line in plan.secret_warnings:
+    for line in render_plan.secret_warnings:
         _warn(line)
 
     auths_dir = root / "cliproxy" / "auths"
@@ -517,7 +518,7 @@ def apply(plan):
     )
     os.chmod(auths_dir, SENSITIVE_DIR_MODE)
     expected_names = set()
-    for filename, credential, plan_label, weight in plan.auth_files:
+    for filename, credential, plan_label, weight in render_plan.auth_files:
         expected_names.add(filename)
         atomic_write_json(
             auths_dir / filename,
@@ -533,11 +534,11 @@ def apply(plan):
             ))
 
     expected_g = set()
-    if plan.go_pool_credential:
+    if render_plan.go_pool_credential:
         pname = "opencode-go-pool.json"
         atomic_write_json(
             auths_dir / pname,
-            plan.go_pool_credential,
+            render_plan.go_pool_credential,
             mode=SENSITIVE_FILE_MODE,
         )
         expected_g.add(pname)
@@ -550,7 +551,7 @@ def apply(plan):
     cliproxy_path = root / "cliproxy" / "config.yaml"
     atomic_write_text(
         cliproxy_path,
-        plan.cliproxy_text,
+        render_plan.cliproxy_text,
         mode=SENSITIVE_FILE_MODE,
     )
     _ok("已生成 %s (config-version 8, mode=%s)" % (cliproxy_path.relative_to(root), mode))
@@ -595,7 +596,7 @@ def apply(plan):
     oc2api_path = root / "opencode2api" / "config.json"
     atomic_write_json(
         oc2api_path,
-        plan.oc2api_config,
+        render_plan.oc2api_config,
         mode=SENSITIVE_FILE_MODE,
     )
     _ok("已生成 %s (go_keys=%d, proxies=%d)" % (oc2api_path.relative_to(root), len(go_keys), len(proxies)))
@@ -603,11 +604,11 @@ def apply(plan):
     nginx_dir = root / "nginx" / "conf.d"
     nginx_dir.mkdir(parents=True, exist_ok=True)
     nginx_path = nginx_dir / "orca.conf"
-    atomic_write_text(nginx_path, plan.nginx_conf)
+    atomic_write_text(nginx_path, render_plan.nginx_conf)
     models_path = root / "nginx" / "models.json"
     atomic_write_json(
         models_path,
-        plan.models_payload,
+        render_plan.models_payload,
     )
     if _sync_nginx_models(models_path):
         _ok("已同步 /etc/nginx/orca-models.json")
@@ -637,9 +638,9 @@ def apply(plan):
     _emit("")
     _info(
         "汇总: Devin 账号 %d（Pro %d / Max %d），模式 %s"
-        % (len(accounts), plan.pro_count, plan.max_count, mode)
+        % (len(accounts), render_plan.pro_count, render_plan.max_count, mode)
     )
-    if mode == "max-hybrid" and plan.max_count == 0:
+    if mode == "max-hybrid" and render_plan.max_count == 0:
         _warn("max-hybrid 模式下没有 Max 号，所有流量仍会落在 Pro 号上")
     if words:
         _info("Devin 敏感词混淆已启用，词条数 %d" % len(words))
@@ -647,7 +648,7 @@ def apply(plan):
         _info("Devin 敏感词混淆未启用（sensitive_words.enabled=false）")
 
     _sync_opencode2api_container(root, oc2api_path, env)
-    _check_plugin_reload(root, plan.cliproxy_config)
+    _check_plugin_reload(root, render_plan.cliproxy_config)
     return 0
 
 

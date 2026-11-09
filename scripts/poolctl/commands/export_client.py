@@ -57,6 +57,3 @@ def export_client(root):
     _emit(json.dumps(devin_config, ensure_ascii=False, indent=2))
     _emit("JSON")
     return 0
-
-
-# ---------------------------------------------------------------------------

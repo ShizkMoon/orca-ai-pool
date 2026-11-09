@@ -242,5 +242,14 @@ class CliproxyPluginConfigTests(unittest.TestCase):
         self.assertNotIn("plugins", config)
 
 
+class RepoRootTests(unittest.TestCase):
+    def test_repo_root_defaults_to_repo_root(self):
+        from scripts.poolctl import fsenv
+
+        self.assertEqual(
+            fsenv.repo_root(), Path(__file__).resolve().parent.parent
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

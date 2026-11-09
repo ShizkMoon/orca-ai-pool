@@ -102,8 +102,3 @@ def _check_plugin_reload(root, cliproxy_config):
         _info("  执行 docker compose restart cliproxyapi 使其生效（挑空闲窗口重启，不影响在途流）")
         return
     remember(started_at)
-
-
-# ---------------------------------------------------------------------------
-# check-opencode
-# ---------------------------------------------------------------------------

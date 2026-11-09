@@ -10,7 +10,7 @@ from .constants import DEFAULT_GATEWAY_PORT
 def repo_root(override=None):
     if override:
         return Path(override).expanduser().resolve()
-    return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parents[2]
 
 
 def atomic_write_text(path, text, mode=None):
@@ -122,8 +122,3 @@ def _env_secret(env, key, root):
     if not value.strip():
         raise PoolctlError("缺少环境变量 %s，请检查 %s/.env" % (key, root))
     return value
-
-
-# ---------------------------------------------------------------------------
-# HTTP 封装
-# ---------------------------------------------------------------------------
