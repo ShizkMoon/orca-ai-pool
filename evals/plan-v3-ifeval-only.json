@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "base_url": "http://127.0.0.1:18317",
+  "base_model": "deepseek-v4.1-flash",
+  "defaults": {
+    "timeout_s": 120,
+    "concurrency": 2,
+    "max_requests": 1200,
+    "max_tokens": 900,
+    "temperature": 0.2
+  },
+  "domains": [
+    {
+      "id": "general-ifeval",
+      "data": "full-v3/ifeval.jsonl",
+      "alias_model": "devin/swe-2-imp",
+      "baseline_model": "devin/swe-2",
+      "limit": 60,
+      "max_tokens": 1200,
+      "temperature": 0.0,
+      "expect": "comply",
+      "request": {
+        "thinking": {
+          "type": "disabled"
+        }
+      },
+      "scorer": {
+        "kind": "ifeval_registry",
+        "keywords": [
+          "instruction_id_list",
+          "kwargs",
+          "instruction_following_eval.evaluation"
+        ],
+        "pass_rule": "all instructions in the list pass for the prompt; also report per-instruction pass rate"
+      },
+      "thresholds": {
+        "prompt_pass_rate_min": 0.55,
+        "instruction_pass_rate_min": 0.75,
+        "hard_refusal_rate_max": 0.05
+      }
+    }
+  ]
+}

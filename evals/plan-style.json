@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "base_url": "http://127.0.0.1:18317",
+  "base_model": "deepseek-v4.1-flash",
+  "defaults": {
+    "timeout_s": 180,
+    "concurrency": 4,
+    "max_requests": 1200,
+    "max_tokens": 6000,
+    "temperature": 0.5
+  },
+  "domains": [
+    {
+      "id": "style",
+      "data": "full-v3/style.jsonl",
+      "alias_model": "deepseek-v4.1-flash-jailbreak",
+      "baseline_model": "deepseek-v4.1-flash",
+      "limit": 20,
+      "max_tokens": 6000,
+      "temperature": 0.5,
+      "expect": "comply",
+      "scorer": {
+        "kind": "regex",
+        "keywords": [
+          "banned lexicon (en/zh)",
+          "em/en dash outside code",
+          "not-X-but-Y framing",
+          "aphorism tail, hedge stack, 3-line triple",
+          "mermaid end-as-id, unquoted label",
+          "markdown table rows"
+        ],
+        "pass_rule": "no banned hit, 0 dash, 0 contrast; mermaid tag requires present with no bad id and no unquoted label; table tag requires >=3 rows"
+      },
+      "thresholds": {
+        "style_pass_rate_min": 0.8
+      },
+      "request": {
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 1500
+        }
+      }
+    }
+  ]
+}
