@@ -7,6 +7,8 @@ from pathlib import Path
 def load_poolctl():
     path = Path(__file__).resolve().parent.parent / "scripts" / "poolctl.py"
     spec = importlib.util.spec_from_file_location("poolctl", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"无法加载 {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -184,7 +186,7 @@ class CliproxyPluginConfigTests(unittest.TestCase):
 
         models = config["api-keys"]["openai-compatibility"][0]["models"]
         aliases = [item.get("alias") for item in models]
-        self.assertIn("deepseek-v4.1-flash", aliases)
+        self.assertNotIn("deepseek-v4.1-flash", aliases)
         self.assertIn("deepseek-v4.1-flash-jailbreak", aliases)
         self.assertNotIn("oauth-model-alias", config)
 
