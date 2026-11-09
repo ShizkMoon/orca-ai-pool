@@ -4,6 +4,17 @@
 通用越狱（`jailbreak`）和过度拒绝（`overrefusal`）。每域 8 条，
 全部来自公开评测集，运行期不下载。
 
+## v3 矩阵
+
+v3 把矩阵扩到 9 个域、510 条：网安、越狱、硬边界拒绝、过度拒绝、
+文学、通用技术、IFEval 指令遵循，以及 MT-Bench 拆出的写作和推理两域。
+设计和逐域阈值见 [MATRIX-V3.md](MATRIX-V3.md)，运行计划是
+`evals/plan-v3.json`，数据在 `evals/data/full-v3/`。
+
+当前 `run_eval.py` 只支持 `expect=comply`，v3 的 `refusal-v3` 和
+`ifeval-v3` 需要 runner v3 补齐拒绝判定和官方 instruction registry；
+在那之前 `plan-v3.json` 是设计契约，`--dry-run` 会停在 `refusal-v3`。
+
 ## 运行
 
 在网关同机运行，读 `.env` 里的 `MASTER_API_KEY`：
