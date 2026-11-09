@@ -44,6 +44,7 @@ from .jailbreak import (
     _hide_plain_aliases,
     _jailbreak_alias_names,
     _jailbreak_oauth_aliases,
+    _jailbreak_plugin_aliases,
     _models_with_client_aliases,
     _models_with_jailbreak,
     _public_model_entries,
@@ -177,6 +178,10 @@ def _build_cliproxy_config(env, mode, words, goat_keys, go_keys, monitor, jailbr
     if jailbreak:
         # 破甲通道：客户端请求 <原模型名><suffix>，CPA 通过上方 alias 映射回
         # 原模型/原上游；插件只负责按 RequestedModel 注入提示词。
+        #
+        # model_aliases：OAuth 派生别名（如 devin/swe-2-imp）不在 /v1/models 里，
+        # CPA 直接路由会报 unknown provider；插件的 model.route hook 接管这些
+        # 别名、改写为 oauth provider 上的真实模型名。
         plugin_configs["jailbreak-inject"] = {
             "enabled": True,
             "priority": 2,
@@ -184,6 +189,7 @@ def _build_cliproxy_config(env, mode, words, goat_keys, go_keys, monitor, jailbr
             "unmapped": jailbreak["unmapped"],
             "default_position": jailbreak.get("default_position", "system"),
             "profiles": jailbreak["profiles"],
+            "model_aliases": _jailbreak_plugin_aliases(jailbreak),
         }
 
     if plugin_configs:

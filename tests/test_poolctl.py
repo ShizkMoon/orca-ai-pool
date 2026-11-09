@@ -241,6 +241,37 @@ class CliproxyPluginConfigTests(unittest.TestCase):
         )
         self.assertNotIn("plugins", config)
 
+    def test_plugin_model_aliases_routes_oauth_suffix_aliases(self):
+        jailbreak = {
+            "suffix": "-jailbreak",
+            "unmapped": "error",
+            "profiles": [
+                {
+                    "name": "devin-swe-2-imp",
+                    "models": ["devin/swe-2", "devin/swe-2-lightning"],
+                    "suffix": "-imp",
+                    "content_domain": "jailbreak",
+                    "mode": "append",
+                    "position": "system",
+                    "prompt": "IMP",
+                }
+            ],
+        }
+        config = poolctl._build_cliproxy_config(
+            self._env(), "pro-only", [], [], [], {"enabled": False}, jailbreak
+        )
+        aliases = config["plugins"]["configs"]["jailbreak-inject"]["model_aliases"]
+        self.assertEqual(
+            aliases,
+            {
+                "devin/swe-2-imp": {"provider": "devin", "model": "devin/swe-2"},
+                "devin/swe-2-lightning-imp": {
+                    "provider": "devin",
+                    "model": "devin/swe-2-lightning",
+                },
+            },
+        )
+
 
 class RepoRootTests(unittest.TestCase):
     def test_repo_root_defaults_to_repo_root(self):

@@ -430,6 +430,26 @@ def _jailbreak_oauth_aliases(jailbreak):
     return aliases
 
 
+def _jailbreak_plugin_aliases(jailbreak):
+    """插件 model.route hook 的别名表：把 oauth 派生别名接管回真实模型。
+
+    OAuth 派生别名（devin/*-jailbreak、devin/*-imp 等）不会出现在
+    /v1/models，CPA 按 RequestedModel 在 devin provider 里找不到它们。
+    插件的 model.route hook 在请求边界接管这些名字、改写为目标
+    oauth provider + 真实模型名。
+    """
+    routes = {}
+    for profile in jailbreak["profiles"]:
+        suffix = _jailbreak_profile_suffix(profile, jailbreak["suffix"])
+        for model in profile.get("models") or []:
+            model = str(model).strip()
+            if not model:
+                continue
+            alias = model + suffix
+            routes[alias] = {"provider": "devin", "model": model}
+    return routes
+
+
 def _hide_plain_aliases(models):
     """剔除猫名调用会被拒的裸模型别名，派生别名原样保留。"""
     hidden = {name.lower() for name in HIDE_PLAIN_ALIASES}
