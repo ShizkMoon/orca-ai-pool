@@ -338,7 +338,7 @@ class RenderPlan:
     nginx_conf: str
     models_payload: dict
     auth_files: list
-    go_pool_credential: dict
+    go_pool_credential: dict | None
     secret_warnings: list
     max_count: int
     pro_count: int
