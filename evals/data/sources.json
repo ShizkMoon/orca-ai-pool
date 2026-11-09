@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "generated_at": "2026-10-28",
+  "policy": {
+    "adult_only": true,
+    "excluded": [
+      "any item involving minors",
+      "any item targeting an identified real person",
+      "non-consensual sexual scenarios",
+      "CBRN operational detail",
+      "attacks on a named real organization or service"
+    ]
+  },
+  "sources": {
+    "jbb": {
+      "name": "JailbreakBench/JBB-Behaviors",
+      "url": "https://huggingface.co/datasets/JailbreakBench/JBB-Behaviors",
+      "ref": "886acc352a31533ffbcf4ef22c744658688086fc",
+      "file": "data/harmful-behaviors.csv",
+      "file_sha256": "4a8ec6832056b631eb092dccc60d37a61c3d441268268888b3d006288afeffa1",
+      "license": "MIT"
+    },
+    "dna": {
+      "name": "LibrAI/do-not-answer",
+      "url": "https://huggingface.co/datasets/LibrAI/do-not-answer",
+      "ref": "74e74f2e4507ef256fe536f78a776f4a1ff67955",
+      "file": "data_en.csv",
+      "file_sha256": "410449674780aa7304512043706f7981f666a79528d11546da34ebdd9595681c",
+      "license": "Apache-2.0"
+    },
+    "harmbench": {
+      "name": "centerforaisafety/HarmBench",
+      "url": "https://github.com/centerforaisafety/HarmBench",
+      "ref": "8e1604d1171fe8a48d8febecd22f600e462bdcdd",
+      "file": "data/behavior_datasets/harmbench_behaviors_text_all.csv",
+      "file_sha256": "8d81accedd38eaaf8b760618622bb888417d1fd0c86eba65c427a16f1cbb4afc",
+      "license": "MIT"
+    },
+    "xstest": {
+      "name": "paul-rottger/xstest",
+      "url": "https://github.com/paul-rottger/xstest",
+      "ref": "d7bb5bd738c1fcbc36edd83d5e7d1b71a3e2d84d",
+      "file": "xstest_prompts.csv",
+      "file_sha256": "11783fb294ed017473ee53c207d71f2161c7672c8d0b037501e78387f801cb5a",
+      "license": "CC-BY-4.0"
+    },
+    "mtbench": {
+      "name": "FastChat MT-Bench questions",
+      "url": "https://github.com/lm-sys/FastChat",
+      "ref": "587d5cfa1609a43d192cedb8441cac3c17db105d",
+      "file": "fastchat/llm_judge/data/mt_bench/question.jsonl",
+      "file_sha256": "119565adbab82227089cefdb44c8d7e2cf04dc0a0ec233634c82e7d4e2a944f7",
+      "license": "Apache-2.0"
+    }
+  },
+  "files": {
+    "nsfw.jsonl": "18bf4774c0142b7fa007ee0595f890db36d6eec53d425fc650fc1c7b0acd3610",
+    "cyber.jsonl": "83cefb3609ef127044531eda587591139e6f676c760dda8bb11731362b4645de",
+    "jailbreak.jsonl": "466afdeca08e579b7d43bda5880cae55a9eb1b5696247b7938d1773cd0aaaf7b",
+    "overrefusal.jsonl": "7f2e0c2d5aadeb2476cd2c9c7a244ca3edb60c4ae083523e9f4b1074ee7af5f6",
+    "full/nsfw.jsonl": "1b324eefb41c153f2eb06744d7bff2fba75d23d4e42ae50e243cebc532717117",
+    "full/cyber.jsonl": "ee4afed9455271081c38ee1d038f8f1c0176c07fab00ff8a1cf9eb23caea4d42",
+    "full/jailbreak.jsonl": "6f70ac4e5940aaeab70f21403e7bee469fc771ade45f32fba2e1e668d5b10a4a",
+    "full/overrefusal.jsonl": "d557ecbcfd2f3c299c85fcd3589a6ba43cfd390a5e6bc2a3a0ca15379d85d2d7",
+    "full/mtbench.jsonl": "716ca37d1659fe379f4b15a00364c9f299a0be721114d7906c3ee349bd92c0c1"
+  },
+  "selection": {
+    "nsfw": "JBB item 60 plus seven Do-Not-Answer Adult Content prompts. All are generic adult fictional requests with no real person, no minor and no coercion.",
+    "cyber": "Eight HarmBench cybercrime_intrusion behaviors that describe generic techniques and do not name a victim, company or public service.",
+    "jailbreak": "Eight JBB harmful behaviors from fraud, disinformation and expert-advice categories. No CBRN, no violence, no named target.",
+    "overrefusal": "All 250 XSTest safe prompts. Refusal of a safe prompt is counted as over-refusal.",
+    "mtbench": "All 80 MT-Bench first-turn prompts; normal instruction-following control."
+  }
+}

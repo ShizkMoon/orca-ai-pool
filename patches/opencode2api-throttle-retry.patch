@@ -1,0 +1,44 @@
+diff --git a/internal/gateway/upstream.go b/internal/gateway/upstream.go
+index 37204f9..effd0e0 100644
+--- a/internal/gateway/upstream.go
++++ b/internal/gateway/upstream.go
+@@ -904,7 +904,11 @@ func (g *Gateway) doKeyUpstream(ctx context.Context, route models.Route, bodies
+ 	}
+ 	setRequestShape(ctx, changed, toolRenames)
+ 	useWARP := g.usesWARP(route.ID, route.Tier, false)
+-	for attempts < g.cfg.Retry.MaxAttempts {
++	limit := g.cfg.Retry.MaxAttempts
++	throttleWaited := time.Duration(0)
++	const throttleCapPerAttempt = 30 * time.Second
++	const throttleCapTotal = 90 * time.Second
++	for attempts < limit {
+ 		if ctx.Err() != nil {
+ 			// Same guard as the anonymous loop: an exhausted request budget
+ 			// must not be spent rotating keys that were never really tried.
+@@ -991,6 +995,26 @@ func (g *Gateway) doKeyUpstream(ctx context.Context, route models.Route, bodies
+ 			g.logger.Debug("upstream rejected a non-retryable request", "component", "upstream", "event", "attempt_rejected", "request_id", ids.Request, "attempt", attempts, "tier", route.Tier, "key_id", keyID, "status", resp.StatusCode, "proxy", proxyLabel, "duration_ms", attemptDuration.Milliseconds())
+ 			return resp, nil, attempts
+ 		}
++		// A 429 is transient and the upstream says how long to wait via
++		// Retry-After. Rotating keys instantly spends the whole attempt budget
++		// inside the same overload window, so wait before the next key instead,
++		// bounded by throttleCapTotal for the request.
++		if resp != nil && resp.StatusCode == http.StatusTooManyRequests && ctx.Err() == nil {
++			wait := parseRetryAfter(resp.Header.Get("Retry-After"))
++			if wait <= 0 {
++				wait = 1500 * time.Millisecond
++			}
++			wait = min(wait, throttleCapPerAttempt)
++			if throttleWaited+wait <= throttleCapTotal {
++				throttleWaited += wait
++				limit++
++				g.logger.Info("upstream throttled the request; waiting before the next key", "component", "upstream", "event", "throttle_wait", "request_id", ids.Request, "attempt", attempts, "key_id", keyID, "status", resp.StatusCode, "wait_ms", wait.Milliseconds())
++				select {
++				case <-time.After(wait):
++				case <-ctx.Done():
++				}
++			}
++		}
+ 		lastResponse = resp
+ 		if useWARP && errors.Is(err, errWARPUnavailable) {
+ 			// No exit at all: another key would only wait on the same pool.

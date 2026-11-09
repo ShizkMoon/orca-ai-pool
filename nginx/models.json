@@ -1,0 +1,35 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "created": 0,
+      "id": "deepseek-v4.1-flash-jailbreak",
+      "object": "model",
+      "owned_by": "opencode-go-pool"
+    },
+    {
+      "created": 0,
+      "id": "devin/swe-2",
+      "object": "model",
+      "owned_by": "devin"
+    },
+    {
+      "created": 0,
+      "id": "devin/swe-2-jailbreak",
+      "object": "model",
+      "owned_by": "devin"
+    },
+    {
+      "created": 0,
+      "id": "devin/swe-2-lightning",
+      "object": "model",
+      "owned_by": "devin"
+    },
+    {
+      "created": 0,
+      "id": "devin/gemini-4-argon",
+      "object": "model",
+      "owned_by": "devin"
+    }
+  ]
+}

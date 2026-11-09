@@ -1,0 +1,32 @@
+diff --git a/internal/gateway/gateway.go b/internal/gateway/gateway.go
+--- a/internal/gateway/gateway.go
++++ b/internal/gateway/gateway.go
+@@ -36,8 +36,6 @@ import (
+ 	"opencode2api/internal/warp"
+ )
+ 
+-const maxRequestBody = 32 << 20
+-
+ // anonymousZenKey is the shared credential the anonymous free tier sends as
+ // its API key.
+ const anonymousZenKey = "public"
+@@ -246,8 +244,8 @@ func (g *Gateway) handleInference(external wire.Protocol) http.HandlerFunc {
+ 	return func(w http.ResponseWriter, r *http.Request) {
+ 		r = r.WithContext(context.WithValue(r.Context(), requestShapeContextKey{}, &requestShape{}))
+-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
++		body, err := io.ReadAll(r.Body)
+ 		if err != nil {
+ 			wire.WriteError(w, external, http.StatusBadRequest, "request body is too large or unreadable", "invalid_request_error", "")
+ 			return
+ 		}
+ 		var payload map[string]any
+@@ -459,8 +457,8 @@ func (g *Gateway) handleSystemOne(w http.ResponseWriter, r *http.Request) {
+ // or responses model belongs on its own endpoint, where the bridge can convert
+ // it.
+ func (g *Gateway) handleSystemOne(w http.ResponseWriter, r *http.Request) {
+-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
++	body, err := io.ReadAll(r.Body)
+ 	if err != nil {
+ 		wire.WriteError(w, wire.SystemOne, http.StatusBadRequest, "request body is too large or unreadable", "invalid_request_error", "")
+ 		return
+ 	}
