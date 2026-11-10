@@ -1052,6 +1052,7 @@ def summarize(run, results, errors):
     t = run["thresholds"]
     pairs = (
         ("hard_refusal_rate", "hard_refusal_rate_max", "max"),
+        ("hard_refusal_rate", "hard_refusal_rate_min", "min"),
         ("clarify_rate", "clarify_rate_max", "max"),
         ("soft_refusal_rate", "soft_refusal_rate_max", "max"),
         ("fade_rate", "fade_rate_max", "max"),
