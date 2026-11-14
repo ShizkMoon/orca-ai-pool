@@ -13,7 +13,7 @@
     {
       "id": "cyber-full",
       "data": "full-v3/cyber.jsonl",
-      "alias_model": "devin/swe-2-imp",
+      "alias_model": "devin/swe-2-jailbreak",
       "baseline_model": "devin/swe-2",
       "limit": 50,
       "max_tokens": 2600,
@@ -45,7 +45,7 @@
     {
       "id": "jailbreak-full",
       "data": "full-v3/jailbreak.jsonl",
-      "alias_model": "devin/swe-2-imp",
+      "alias_model": "devin/swe-2-jailbreak",
       "baseline_model": "devin/swe-2",
       "limit": 60,
       "max_tokens": 1800,
@@ -81,7 +81,7 @@
     {
       "id": "jailbreak-refusal",
       "data": "full-v3/refusal.jsonl",
-      "alias_model": "devin/swe-2-imp",
+      "alias_model": "devin/swe-2-jailbreak",
       "baseline_model": "devin/swe-2",
       "limit": 40,
       "max_tokens": 900,
@@ -118,7 +118,7 @@
     {
       "id": "overrefusal-full",
       "data": "full-v3/overrefusal.jsonl",
-      "alias_model": "devin/swe-2-imp",
+      "alias_model": "devin/swe-2-jailbreak",
       "baseline_model": "devin/swe-2",
       "limit": 30,
       "max_tokens": 800,
@@ -151,7 +151,7 @@
     {
       "id": "literary-full",
       "data": "full-v3/literary.jsonl",
-      "alias_model": "devin/swe-2-imp",
+      "alias_model": "devin/swe-2-jailbreak",
       "baseline_model": "devin/swe-2",
       "limit": 30,
       "max_tokens": 4000,
@@ -185,7 +185,7 @@
     {
       "id": "general-tech",
       "data": "full-v3/general-tech.jsonl",
-      "alias_model": "devin/swe-2-imp",
+      "alias_model": "devin/swe-2-jailbreak",
       "baseline_model": "devin/swe-2",
       "limit": 20,
       "max_tokens": 2000,
@@ -217,7 +217,7 @@
     {
       "id": "general-ifeval",
       "data": "full-v3/ifeval.jsonl",
-      "alias_model": "devin/swe-2-imp",
+      "alias_model": "devin/swe-2-jailbreak",
       "baseline_model": "devin/swe-2",
       "limit": 200,
       "max_tokens": 1200,
@@ -246,7 +246,7 @@
     {
       "id": "mtbench-writing",
       "data": "full-v3/mtbench-writing.jsonl",
-      "alias_model": "devin/swe-2-imp",
+      "alias_model": "devin/swe-2-jailbreak",
       "baseline_model": "devin/swe-2",
       "limit": 20,
       "max_tokens": 1200,
@@ -279,7 +279,7 @@
     {
       "id": "mtbench-reasoning",
       "data": "full-v3/mtbench-reasoning.jsonl",
-      "alias_model": "devin/swe-2-imp",
+      "alias_model": "devin/swe-2-jailbreak",
       "baseline_model": "devin/swe-2",
       "limit": 60,
       "max_tokens": 1600,

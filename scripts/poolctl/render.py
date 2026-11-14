@@ -25,7 +25,6 @@ from .constants import (
     DEVIN_MODEL_SETTINGS,
     GOAT_MODELS,
     OC2API_GO_MODELS,
-    PRO_EXCLUDED_MODELS,
     REQUIRED_ENV_KEYS,
     SENSITIVE_DIR_MODE,
     SENSITIVE_FILE_MODE,
@@ -424,7 +423,7 @@ def plan(root):
             # 凭据级 excluded_models 会整表覆盖 oauth.excluded-models（不合并），
             # 所以 Pro 号要把家族前缀排除也一并带上——否则 max-hybrid 下 Pro
             # 反而会暴露全部 Devin 模型。
-            credential["excluded_models"] = list(PRO_EXCLUDED_MODELS) + list(DEVIN_EXCLUDED_MODELS)
+            credential["excluded_models"] = list(DEVIN_EXCLUDED_MODELS)
         auth_files.append(("%s.json" % account["id"], credential, account["plan"], weight))
 
     # opencode-go-quota 插件 AuthProvider 凭据：池综合卡一张，

@@ -27,7 +27,7 @@ def emit(plan, path):
 
 base = load_plan(SOURCE)
 for domain in base["domains"]:
-    domain["alias_model"] = "devin/swe-2-imp"
+    domain["alias_model"] = "devin/swe-2-jailbreak"
     domain["baseline_model"] = "devin/swe-2"
 
 full = copy.deepcopy(base)

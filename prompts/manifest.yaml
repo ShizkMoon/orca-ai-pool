@@ -66,29 +66,11 @@ profiles:
 
 
   - name: "devin-swe-2"
-    description: "SWE-2 破甲：Cinder/Nono full override（funnybones69/swe2-jailbreak-proxy）"
+    description: "SWE-2 破甲：非人格化运行层（沙箱契约 + 输出预算 + 三条边界），不写人格"
     suffix: "-jailbreak"
     content_domain: "jailbreak"
     models:
       - "devin/swe-2"
-    source_file: "external:funnybones69/swe2-jailbreak-proxy override.txt"
-    file: "upstream/deepseek-4-1.md"
-    overlay: "local/devin-swe-2-style.md"
-    overlay_position: "prepend"
-    position: "system"
-    mode: "append"
-    reminder: "local/frame-force.md"
-    reminder_position: "in_chat"
-    reminder_depth: 1
-    reminder_mode: "append"
-
-  - name: "devin-swe-2-imp"
-    description: "SWE-2 破甲：非人格化运行层（沙箱运行契约 + 输出预算 + 三条边界），不写人格"
-    suffix: "-imp"
-    content_domain: "jailbreak"
-    models:
-      - "devin/swe-2"
-      - "devin/swe-2-lightning"
     source_file: "local/devin-swe-2-impersonal.md"
     file: "local/devin-swe-2-impersonal.md"
     position: "system"

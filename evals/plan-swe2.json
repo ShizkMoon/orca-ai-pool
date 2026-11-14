@@ -28,7 +28,7 @@
     {
       "id": "literary-full",
       "data": "full/literary.jsonl",
-      "alias_model": "devin/swe-2-imp",
+      "alias_model": "devin/swe-2-jailbreak",
       "baseline_model": "devin/swe-2",
       "limit": 30,
       "max_tokens": 4000,

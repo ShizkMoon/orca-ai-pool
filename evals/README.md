@@ -63,7 +63,7 @@ python3 evals/run_eval.py --plan evals/plan-full.json --baseline-only --limit 20
 全量计划共 209 条：NSFW 19、网安 35、通用越狱 50、XSTest safe 25、
 MT-Bench 80。结果见 [../docs/eval-full-2026-10-28.md](../docs/eval-full-2026-10-28.md)。
 
-非人格化别名（`devin/swe-2-imp`）的对照计划是 `evals/plan-imp-v2.json`，共 160 条：
+非人格化别名（`devin/swe-2-jailbreak`）的对照计划是 `evals/plan-imp-v2.json`，共 160 条：
 文学 30、网安 35、通用越狱 50、过度拒绝 25、指令遵循 20。
 
 ## 输出

@@ -29,8 +29,6 @@ SENSITIVE_WORDS_BUILTIN = [
     "hook",
 ]
 
-PRO_EXCLUDED_MODELS = ["devin/gemini-4-argon", "devin/swe-2-lightning"]
-
 GO_POOL_MONTHLY_USD = 80
 GO_POOL_5H_USD = 16
 GO_POOL_WEEKLY_USD = 40
@@ -89,8 +87,6 @@ HIDE_PLAIN_ALIASES = ("deepseek-v4.1-flash",)
 # Devin OAuth 通道对外暴露的模型（与 oauth.settings.devin 保持一致）
 DEVIN_MODEL_SETTINGS = [
     {"name": "devin/swe-2", "max-context-length": 262144},
-    {"name": "devin/swe-2-lightning", "max-context-length": 262144},
-    {"name": "devin/gemini-4-argon", "max-context-length": 1048576},
 ]
 DEVIN_MODELS = [item["name"] for item in DEVIN_MODEL_SETTINGS]
 
@@ -103,6 +99,8 @@ DEVIN_EXCLUDED_MODELS = [
     "devin/claude-*",
     "devin/deepseek-*",
     "devin/gemini-3-*",
+    "devin/gemini-4-*",
+    "devin/swe-2-*",
     "devin/glm-*",
     "devin/gpt-*",
     "devin/grok-*",

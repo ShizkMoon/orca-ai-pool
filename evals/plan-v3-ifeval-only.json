@@ -13,7 +13,7 @@
     {
       "id": "general-ifeval",
       "data": "full-v3/ifeval.jsonl",
-      "alias_model": "devin/swe-2-imp",
+      "alias_model": "devin/swe-2-jailbreak",
       "baseline_model": "devin/swe-2",
       "limit": 60,
       "max_tokens": 1200,

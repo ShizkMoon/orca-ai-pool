@@ -197,7 +197,7 @@ class CliproxyPluginConfigTests(unittest.TestCase):
             "profiles": [
                 {
                     "name": "gemini",
-                    "models": ["devin/gemini-4-argon"],
+                    "models": ["devin/swe-2"],
                     "mode": "prepend",
                     "prompt": "JB",
                 }
@@ -211,8 +211,8 @@ class CliproxyPluginConfigTests(unittest.TestCase):
             aliases,
             [
                 {
-                    "name": "devin/gemini-4-argon",
-                    "alias": "devin/gemini-4-argon-jailbreak",
+                    "name": "devin/swe-2",
+                    "alias": "devin/swe-2-jailbreak",
                     "fork": True,
                 }
             ],
@@ -227,12 +227,12 @@ class CliproxyPluginConfigTests(unittest.TestCase):
         jailbreak = {
             "suffix": "-jailbreak",
             "profiles": [
-                {"models": ["deepseek-v4.1-flash", "devin/gemini-4-argon"]}
+                {"models": ["deepseek-v4.1-flash", "devin/swe-2"]}
             ],
         }
         self.assertEqual(
             poolctl._jailbreak_alias_names(jailbreak),
-            ["deepseek-v4.1-flash-jailbreak", "devin/gemini-4-argon-jailbreak"],
+            ["deepseek-v4.1-flash-jailbreak", "devin/swe-2-jailbreak"],
         )
 
     def test_without_jailbreak_no_plugin_section(self):
@@ -247,9 +247,9 @@ class CliproxyPluginConfigTests(unittest.TestCase):
             "unmapped": "error",
             "profiles": [
                 {
-                    "name": "devin-swe-2-imp",
-                    "models": ["devin/swe-2", "devin/swe-2-lightning"],
-                    "suffix": "-imp",
+                    "name": "devin-swe-2",
+                    "models": ["devin/swe-2"],
+                    "suffix": "-jailbreak",
                     "content_domain": "jailbreak",
                     "mode": "append",
                     "position": "system",
@@ -264,11 +264,7 @@ class CliproxyPluginConfigTests(unittest.TestCase):
         self.assertEqual(
             aliases,
             {
-                "devin/swe-2-imp": {"provider": "devin", "model": "devin/swe-2"},
-                "devin/swe-2-lightning-imp": {
-                    "provider": "devin",
-                    "model": "devin/swe-2-lightning",
-                },
+                "devin/swe-2-jailbreak": {"provider": "devin", "model": "devin/swe-2"},
             },
         )
 
