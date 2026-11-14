@@ -82,7 +82,7 @@ GOAT_MODELS = [
 CLIENT_COMPAT_ALIASES = ()
 CLIENT_COMPAT_BASE_ALIAS = "deepseek-v4.1-flash"
 # 不再允许客户端直接调用的裸模型名；对应的破甲/nsfw 派生别名继续对外提供。
-HIDE_PLAIN_ALIASES = ("deepseek-v4.1-flash",)
+HIDE_PLAIN_ALIASES = ("deepseek-v4.1-flash", "devin/swe-2")
 
 # Devin OAuth 通道对外暴露的模型（与 oauth.settings.devin 保持一致）
 DEVIN_MODEL_SETTINGS = [
