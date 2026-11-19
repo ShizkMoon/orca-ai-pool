@@ -79,6 +79,21 @@ profiles:
     reminder_position: "post_history"
     reminder_mode: "append"
 
+  - name: "devin-glm-5-3"
+    description: "GLM 5.3 综合破甲：上游 glm-5-3-flash.md 主干 × 本地三条边界/执行教义/输出契约"
+    suffix: "-jailbreak"
+    content_domain: "jailbreak"
+    models:
+      - "glm-5.3"
+      - "glm-5.3-flash"
+    source_file: "upstream/glm-5-3-flash-synth.md"
+    file: "upstream/glm-5-3-flash-synth.md"
+    position: "system"
+    mode: "prepend"
+    reminder: "overlays/reminder-jailbreak.md"
+    reminder_position: "post_history"
+    reminder_mode: "append"
+
   # Devin 还没上线，先不生成 devin/*-jailbreak 别名。上线后取消注释即可。
   # - name: "gemini-4-argon"
   #   suffix: "-jailbreak"

@@ -65,6 +65,18 @@ OC2API_GO_MODELS = [
         "max-context-length": 1048576,
         "thinking": {"levels": ["none", "low", "high", "max"]},
     },
+    {
+        "name": "glm-5.3",
+        "alias": "glm-5.3",
+        "max-context-length": 202752,
+        "thinking": {"levels": ["none", "low", "high", "max"]},
+    },
+    {
+        "name": "glm-5.3-flash",
+        "alias": "glm-5.3-flash",
+        "max-context-length": 202752,
+        "thinking": {"levels": ["none", "low", "high", "max"]},
+    },
 ]
 
 GOAT_MODELS = [
@@ -82,7 +94,7 @@ GOAT_MODELS = [
 CLIENT_COMPAT_ALIASES = ()
 CLIENT_COMPAT_BASE_ALIAS = "deepseek-v4.1-flash"
 # 不再允许客户端直接调用的裸模型名；对应的破甲/nsfw 派生别名继续对外提供。
-HIDE_PLAIN_ALIASES = ("deepseek-v4.1-flash", "devin/swe-2")
+HIDE_PLAIN_ALIASES = ("deepseek-v4.1-flash", "devin/swe-2", "glm-5.3", "glm-5.3-flash")
 
 # Devin OAuth 通道对外暴露的模型（与 oauth.settings.devin 保持一致）
 DEVIN_MODEL_SETTINGS = [
