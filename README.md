@@ -119,6 +119,7 @@ curl -s "http://$HOST:8317/v1/chat/completions" \
 | 导出客户端配置 | `python3 scripts/poolctl.py export-client` |
 | 同步破甲提示词 | `python3 scripts/poolctl.py sync-jailbreaks` |
 | 跑破甲评测 | `python3 evals/run_eval.py --plan evals/plan.json --out evals/results/run` |
+| 采集用量 | cron `*/5 * * * *` 跑 `python3 scripts/record_usage.py`，追加写 `usage-logs/usage-YYYY-MM.jsonl` |
 
 `render` 是唯一配置生成入口。CPA 普通配置会热载；C ABI 插件配置只在进程启动时读取，
 改完插件配置后需要 `docker compose restart cliproxyapi`。
@@ -198,6 +199,7 @@ orca-ai-pool/
 ├── .github/workflows/ci.yml   # 测试、构建与 Compose 校验
 ├── scripts/
 │   ├── poolctl.py             # 配置生成与运维 CLI
+│   ├── record_usage.py        # 每 5 分钟把 CPA 记账队列落成 JSONL
 │   └── install-nginx.sh       # nginx 配置安装与 TLS 初始化
 ├── plugin/
 │   ├── jailbreak-inject/      # 破甲提示词注入插件

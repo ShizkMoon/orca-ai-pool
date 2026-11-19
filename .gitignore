@@ -24,3 +24,6 @@ plugin/*/opencode-go-quota.h
 # poolctl 插件漂移检测的运行时状态
 .poolctl-plugin-state.json
 evals/results/
+
+# 用量采集产物（scripts/record_usage.py 每 5 分钟追加）
+usage-logs/
