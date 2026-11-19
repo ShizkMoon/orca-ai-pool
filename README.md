@@ -1,6 +1,6 @@
 # orca-ai-pool
 
-> **说明文档**：面向使用者和部署者。技术实现见 [`docs/TECHNICAL.md`](docs/TECHNICAL.md)，
+> **说明文档**：面向使用者和部署者。技术实现见 [`docs/jailbreak.md`](docs/jailbreak.md)，
 > 完整部署步骤见 [`DEPLOY.md`](DEPLOY.md)，容量规划见 [`docs/capacity-planning.md`](docs/capacity-planning.md)。
 
 orca-ai-pool 是一个多上游 AI 号池网关。它用 **CPA (CLIProxyAPI)** 做统一入口，
@@ -14,7 +14,8 @@ orca-ai-pool 是一个多上游 AI 号池网关。它用 **CPA (CLIProxyAPI)** �
 - **缓存优先**：同一会话尽量粘同一凭据，避免前缀缓存被轮询打散。
 - **配额可见**：Devin 通过管理接口读配额，OpenCode Go 通过自研插件展示逐 key 余量。
 - **可选破甲别名**：`<模型名>-jailbreak`（通用破甲）和 `<模型名>-nsfw`（成人虚构）
-  在进入上游前注入对应提示词，执行模型不变。
+  在进入上游前注入对应提示词，执行模型不变。当前 manifest 只配了 `jailbreak` profile，
+  `-nsfw` 需自行启用。
 - **可选 Devin 敏感词混淆**：按 `accounts.yaml` 开关对 Devin 请求做零宽字符处理。
 - **可重复部署**：`.env` + `accounts.yaml` + `poolctl render` 生成全部运行配置。
 
@@ -31,6 +32,64 @@ flowchart LR
     W["CPAMC 管理面板"] -. "管理面限流" .-> N
 ```
 
+### 请求生命周期
+
+一次 `/v1/chat/completions` 在入口、CPA 和上游之间走完鉴权、模型还原、凭据选择和记账：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as 客户端
+    participant N as nginx 8317
+    participant P as CPA
+    participant J as jailbreak-inject
+    participant U as 上游 Devin / Go / GOAT
+    participant Q as usage-queue
+    C->>N: POST /v1/chat/completions，Bearer 主 key
+    N->>P: /v1 不限速，透传到 127.0.0.1:18317
+    P->>P: 校验主 key
+    opt 主 key 无效
+        P-->>C: 401，不进上游
+    end
+    P->>J: 交付请求体与 RequestedModel
+    J->>J: 剥离 -jailbreak 后缀，匹配 profile
+    J-->>P: 基座模型名 + 注入后的提示词
+    P->>P: 会话亲和按 prompt_cache_key 选凭据（TTL 2 小时）
+    opt 选中凭据在冷却中
+        P->>P: 顺延到下一个可用凭据
+    end
+    P->>U: 转发基座模型请求
+    U-->>P: SSE 分块
+    P-->>N: 首块到达即回传
+    N-->>C: 流式正文
+    P->>Q: 请求结束写入记账条目
+    Note over Q: cron 每 5 分钟拉一次 usage-queue
+```
+
+### 凭据状态
+
+Devin OAuth session 和 OpenCode Go key 共用一套状态机。冷却不是故障，是号池的常规节奏：
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> active: render 写入凭据
+    active --> quota_exhausted: 上游 429，配额耗尽
+    active --> cooling: 瞬时错误 5xx 或超时
+    quota_exhausted --> cooling: 配额耗尽解绑会话亲和
+    cooling --> active: 60 秒瞬时冷却到期
+    cooling --> active: 额度窗口重置或配额回升
+    active --> removed: 人工移除，改 accounts.yaml 后 render
+    cooling --> removed: 人工移除，改 accounts.yaml 后 render
+    removed --> [*]
+    note right of cooling
+        Devin：request-scoped-errors 命中
+        Reached free model rate limit
+        Go key：opencode2api 15 秒失败冷却
+        或逐 key 余量归零
+    end note
+```
+
 ### 三路上游
 
 | 上游 | 凭据 | 主要作用 |
@@ -41,16 +100,19 @@ flowchart LR
 
 ### 对外模型
 
-客户端直接使用模型 ID，`GET /v1/models` 就是实际路由表：
+裸基座模型名在 `HIDE_PLAIN_ALIASES` 里被过滤，客户端只能看到破甲别名。
+生产环境 `GET /v1/models` 当前返回四个：
 
-| 模型 | 路由 |
-|---|---|
-| `devin/swe-2` | Devin OAuth |
-| `devin/swe-2-lightning` | Devin OAuth |
-| `devin/gemini-4-argon` | Devin OAuth |
-| `deepseek-v4.1-flash` | OpenCode Go / GOAT 聚合 |
-| `deepseek-v4.1-flash-jailbreak` | 同 `deepseek-v4.1-flash`，注入破甲提示词 |
-| `deepseek-v4.1-flash-nsfw` | 同 `deepseek-v4.1-flash`，注入成人虚构提示词 |
+| 模型 | 执行模型 | 路由 |
+|---|---|---|
+| `deepseek-v4.1-flash-jailbreak` | `deepseek-v4.1-flash` | OpenCode Go / GOAT 聚合 |
+| `glm-5.3-jailbreak` | `glm-5.3` | OpenCode Go 池 |
+| `glm-5.3-flash-jailbreak` | `glm-5.3-flash` | OpenCode Go 池 |
+| `devin/swe-2-jailbreak` | `devin/swe-2` | Devin OAuth |
+
+glm-5.3 系列上下文 202752，thinking 支持 `none`、`low`、`high`、`max` 四档，与池里
+其他 Go 模型一致。裸基座模型（`deepseek-v4.1-flash`、`glm-5.3`、`glm-5.3-flash`、
+`devin/swe-2`）不对客户端开放，要用哪个执行模型就选对应基座名的别名。
 
 破甲别名只在 `prompts/manifest.yaml` 配置了对应 profile 时出现。模型 ID 进入上游前
 会还原成基座模型，破甲插件只修改请求内容。长提示词放 system 走缓存，末尾只注入一条
@@ -102,7 +164,7 @@ curl -s "http://$HOST:8317/v1/models" \
 curl -s "http://$HOST:8317/v1/chat/completions" \
   -H "Authorization: Bearer $CPA_KEY" \
   -H 'Content-Type: application/json' \
-  -d '{"model":"devin/swe-2","messages":[{"role":"user","content":"ping"}],"max_tokens":8}'
+  -d '{"model":"devin/swe-2-jailbreak","messages":[{"role":"user","content":"ping"}],"max_tokens":8}'
 ```
 
 返回 `choices` 即说明入口、CPA 和至少一条上游链路工作正常。
@@ -161,7 +223,6 @@ CPAMC 管理面板地址为 `http://<服务器>:8317/management.html`，密码�
 | 文档 | 内容 |
 |---|---|
 | [`GLOSSARY.md`](GLOSSARY.md) | 号池与破甲通道的规范术语 |
-| [`docs/TECHNICAL.md`](docs/TECHNICAL.md) | 组件契约、配置生成、路由、缓存、插件、安全、CLI、故障排查 |
 | [`docs/jailbreak.md`](docs/jailbreak.md) | 破甲通道的设计、注入语义、失败模式与实现状态 |
 | [`docs/jailbreak-research.md`](docs/jailbreak-research.md) | 酒馆社区、公开破甲提示词与 NSFW 提示词的调研 |
 | [`docs/eval-2026-10-27.md`](docs/eval-2026-10-27.md) | 四域评测结果、基座对照与已知限制 |
@@ -207,7 +268,7 @@ orca-ai-pool/
 ├── prompts/                   # 破甲清单、overlay、上游提示词
 ├── templates/                 # 配置参考模板
 ├── docs/
-│   ├── TECHNICAL.md           # 技术文档
+│   ├── jailbreak.md           # 破甲通道设计与实现状态
 │   └── capacity-planning.md   # 容量规划
 └── tests/                     # poolctl 回归测试
 ```

@@ -3,7 +3,7 @@
 > 目标机：`root@<YOUR_SERVER_IP>`（Debian 13，Docker 26.1.5 + Compose 2.26.1 已装好，镜像已预拉）
 > 部署路径：`/opt/orca-ai-pool/`
 >
-> 相关文档：[说明文档](README.md) · [技术文档](docs/TECHNICAL.md) ·
+> 相关文档：[说明文档](README.md) · [破甲通道设计](docs/jailbreak.md) ·
 > [容量规划](docs/capacity-planning.md)
 
 ```mermaid
@@ -116,7 +116,9 @@ curl -s http://127.0.0.1:8317/v1/models \
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18317/v1/models
 ```
 
-模型列表含基座模型和对应的 `-jailbreak` / `-nsfw` 别名即成功。
+模型列表出现四个 `-jailbreak` 别名（`deepseek-v4.1-flash-jailbreak`、`glm-5.3-jailbreak`、
+`glm-5.3-flash-jailbreak`、`devin/swe-2-jailbreak`）即成功。裸基座模型名不会出现，
+客户端只能用别名调用。
 
 ### 破甲评测
 
