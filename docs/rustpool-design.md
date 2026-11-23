@@ -228,3 +228,21 @@ accounting: { dir: usage-logs/, ring: 4096 }
 
 不做：客户端限流计费、web UI、多租户、DB、Redis、k8s、WASM（P5 再议）、io_uring / thread-per-core（QPS < 1）。
 定制面收窄到三处：YAML（别名 / 凭据 / 节流 / 窗口）、prompts/（profile 内容）、drivers/（新上游 = 1 个文件 + 1 个配置块）。
+
+## 11. 扩展接缝（预留扩展接口）
+
+原则：预留接缝，不预留复杂度。每条接缝要么是纯函数边界，要么是声明式表格；扩展 = 新模块 + 一处注册（enum 变体 / 路由行 / YAML 行）。不引入插件框架，不为假想需求加抽象。
+
+| 接缝 | 扩展动作 | 动哪里 |
+|---|---|---|
+| Driver enum | 新上游 | drivers/ 新模块 + AnyDriver 加变体 + dispatch 加一臂，核心零改 |
+| Wire 端点 | 新客户端方言（如 OpenAI Responses API） | wire/ 新模块 + router 一行 |
+| Pipeline 阶段 | 计量、脱敏等新中间件 | pipeline 加一个纯函数阶段，YAML 门控开关 |
+| 错误分类表 | 新上游错误样式 | 改 YAML 表，不重编译 |
+| Probe 策略 | headless 等新探测方式 | 策略 enum 加变体，YAML 选定 |
+| Alerts sink | Telegram / ntfy / 邮件 | sink 加一个变体 |
+| Config schema | 字段演进 | version 字段已保留；未知键 SIGHUP 时告警不拒载（前向兼容） |
+
+诚实边界：enum 分发是编译期扩展，加驱动仍要发版。第三方运行时插件对应 P5 的 WASM，再议，本期不做。io_uring 仍按 §0.1 的 QPS 前提不进栈。
+
+architecture.md §4 的定制面收窄到三处，对应表里的接缝：改参数走 YAML，改提示词走 prompts/，加上游走 drivers/。
