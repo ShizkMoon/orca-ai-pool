@@ -18,6 +18,15 @@ v3 方案:  上面的 6 个 + rustpoold + DuckDB + SQLite + Litestream    → 11
 v4 方案:  rustpool ×2 节点 (对等) + systemd                          → 1 种部件, ~60MB/节点
 ```
 
+### 0.1 规模前提（2026-11-23 补）
+
+两条使用前提定死方案边界，也回答"为什么敢全自研"：
+
+- **自用/小范围（2–10 人）**。Devin 白嫖窗口是个人杠杆：协议漂移砸下来的最坏情况是"这个池子先不用了"，不是"断一条业务线"——自研 Devin 驱动的维护期望由此封顶。小规模同时解锁一揽子豁免：单文件配置、无租户隔离、管理面只开 localhost、推送代替计费。
+- **高效前沿**。数据面全 Rust（axum/tower/hyper/rustls/arc-swap/governor），SSE 零拷贝直通，per-凭据长连接池，单进程 ~60MB。前沿的边界同样写死：QPS<1 时 io_uring、thread-per-core 这类深水区技术是装饰，不进栈；前沿性落在形状上（无状态对等、函数化亲和、socket activation），不在孤立的技术名词上。
+
+Devin 驱动配一条逃生舱：上游驱动做成可插拔 trait，仓库常备一个 20 行 passthrough 驱动指向本地保留的 CPA 二进制。Devin 协议大改、自研没跟上时，一行配置切回 CPA 过渡，追平再切回——革命保留，尾部风险封死。
+
 ## 1. 总架构
 
 ```mermaid
@@ -189,7 +198,7 @@ flowchart LR
 | opencode-go + goat 驱动 | opencode2api 的变换逻辑（仓库内已有） | 3–4 天 | 低——纯 openai-compat，tests/ 可迁移 |
 | 调度器 + 冷却 + 窗口 | CPA 语义 + docs 描述 | 2 天 | 低——纯函数，单测全覆盖 |
 | 破甲注入中间件 | jailbreak-inject (Go) 按 docs/jailbreak.md 语义重写 | 2–3 天 | 中——注入语义有评测兜底（evals/） |
-| Devin 驱动 | 读 CPA 上游源码，port OAuth 刷新与请求形状，兼容 auths/*.json + .cds | 2–5 天 | 最高——协议细节在别人代码里 |
+| Devin 驱动 | 读 CPA 上游源码，port OAuth 刷新与请求形状，兼容 auths/*.json + .cds | 2–5 天 | 最高——配 0.1 的逃生舱，一行配置可切回 CPA 过渡 |
 | 会计 + 告警 + 部署命令 | record_usage.py 语义 | 1–2 天 | 低 |
 
 总量 3–5 周（单人，非全职）。目标代码量 ≤5k 行 Rust——替换 6 个部件，这个预算内可审。
