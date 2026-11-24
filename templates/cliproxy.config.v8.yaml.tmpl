@@ -90,8 +90,13 @@ oauth:
       - "devin/muse-*"
       - "devin/nemotron-*"
       - "devin/swe-1-*"
+  # Devin 瞬时容量抖动会以 permission_denied 返回，CPA 归成 403 后触发 30 分钟
+  # 模型冷却；双号同时中招整池清零。这条把它降成请求级错误，换号重试不冷却。
   request-scoped-errors:
     devin:
+      - status: 403
+        match: ["an internal error occurred"]
+        action: "continue"
       - status: 429
         match: ["Reached free model rate limit", "resource_exhausted"]
         action: "continue-and-cooldown"

@@ -108,6 +108,14 @@ def _build_cliproxy_config(env, mode, words, goat_keys, go_keys, monitor, jailbr
             "excluded-models": {"devin": list(DEVIN_EXCLUDED_MODELS)},
             "request-scoped-errors": {
                 "devin": [
+                    # Devin 的瞬时容量抖动会以 permission_denied 返回，CPA 归成 403
+                    # 后走 30 分钟模型冷却，双号同时中招时整池清零。这条把它降级成
+                    # 请求级错误：换下一个凭据重试，不触发冷却。
+                    {
+                        "status": 403,
+                        "match": ["an internal error occurred"],
+                        "action": "continue",
+                    },
                     {
                         "status": 429,
                         "match": ["Reached free model rate limit", "resource_exhausted"],
