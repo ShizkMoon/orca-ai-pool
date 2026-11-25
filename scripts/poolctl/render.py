@@ -21,6 +21,7 @@ from .console import PoolctlError, _banner, _emit, _info, _ok, _warn
 from .constants import (
     DEFAULT_GATEWAY_PORT,
     DEFAULT_INTERNAL_PORT,
+    DEVIN_CATALOG_PATH,
     DEVIN_EXCLUDED_MODELS,
     DEVIN_MODEL_SETTINGS,
     GOAT_MODELS,
@@ -31,6 +32,7 @@ from .constants import (
     YAML_HEADER,
 )
 from .deploy import _sync_opencode2api_container
+from .devin_catalog import build as build_devin_catalog
 from .fsenv import (
     _int_env,
     _require_env,
@@ -53,7 +55,9 @@ from .jailbreak import (
 from .plugincheck import _check_plugin_reload
 from .templates import NGINX_CONF, NGINX_SNIPPET
 
-def _build_cliproxy_config(env, mode, words, goat_keys, go_keys, monitor, jailbreak=None):
+def _build_cliproxy_config(
+    env, mode, words, goat_keys, go_keys, monitor, jailbreak=None, devin_catalog_payload=None
+):
     if jailbreak:
         _validate_jailbreak_routes(jailbreak, include_goat=bool(goat_keys))
     # DISABLE_AUTH=true（.env，测试环境用）：access.api-keys 留空 = 客户端免鉴权。
@@ -64,6 +68,9 @@ def _build_cliproxy_config(env, mode, words, goat_keys, go_keys, monitor, jailbr
     )
     config = {
         "config-version": 8,
+        # Devin 目录补录（见 devin_catalog.py）：registry 只认 catalog 里的模型，
+        # 官方清单还没收录的型号靠这里补。没有补录数据时留空，回落到内置清单。
+        **({"models": {"devin-catalog": DEVIN_CATALOG_PATH}} if devin_catalog_payload else {}),
         # 公网口由 nginx 前置，管理面才能被限流；CPA 只监听内部端口。
         # host 留空（容器内 0.0.0.0），回环限制由 docker-compose 的端口映射保证：
         #   "127.0.0.1:18317:18317"
@@ -339,6 +346,7 @@ class RenderPlan:
     words: list
     monitor: dict
     jailbreak: object
+    devin_catalog: dict
     cliproxy_config: dict
     cliproxy_text: str
     oc2api_config: dict
@@ -460,8 +468,19 @@ def plan(root):
 
     # --- 2. cliproxy/config.yaml ------------------------------------------
     words = _sensitive_words(devin_pool)
+    # Devin 目录补录：registry 只认 catalog 里的模型，官方清单没收录的型号（swe-2.1）
+    # 必须自己补，否则请求被挡成 unknown provider。
+    catalog_payload, catalog_added, catalog_source, catalog_warning = build_devin_catalog(
+        root / "cliproxy" / "catalog" / "devin_models.json"
+    )
+    devin_catalog = {
+        "payload": catalog_payload,
+        "added": catalog_added,
+        "source": catalog_source,
+        "warning": catalog_warning,
+    }
     cliproxy_config = _build_cliproxy_config(
-        env, mode, words, goat_keys, go_keys, monitor, jailbreak
+        env, mode, words, goat_keys, go_keys, monitor, jailbreak, catalog_payload
     )
     cliproxy_text = YAML_HEADER + yaml.safe_dump(
         cliproxy_config,
@@ -494,6 +513,7 @@ def plan(root):
         words=words,
         monitor=monitor,
         jailbreak=jailbreak,
+        devin_catalog=devin_catalog,
         cliproxy_config=cliproxy_config,
         cliproxy_text=cliproxy_text,
         oc2api_config=oc2api_config,
@@ -568,6 +588,19 @@ def apply(render_plan):
         mode=SENSITIVE_FILE_MODE,
     )
     _ok("已生成 %s (config-version 8, mode=%s)" % (cliproxy_path.relative_to(root), mode))
+    catalog_info = render_plan.devin_catalog
+    if catalog_info["warning"]:
+        _warn(catalog_info["warning"])
+    if catalog_info["payload"]:
+        catalog_path = root / "cliproxy" / "catalog" / "devin_models.json"
+        catalog_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(catalog_path, catalog_info["payload"])
+        added_label = "、".join(catalog_info["added"]) or "无"
+        _ok(
+            f"已生成 {catalog_path.relative_to(root)}"
+            f"（Devin 目录 {len(catalog_info['payload']['devin'])} 个模型，"
+            f"补录 {added_label}，源 {catalog_info['source']}）"
+        )
     if jailbreak:
         _ok(
             "破甲通道已启用: 默认后缀 %s，profiles=%d（%s）"

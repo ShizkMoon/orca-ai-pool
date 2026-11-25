@@ -101,7 +101,7 @@ stateDiagram-v2
 ### 对外模型
 
 裸基座模型名在 `HIDE_PLAIN_ALIASES` 里被过滤，客户端只能看到破甲别名。
-生产环境 `GET /v1/models` 当前返回四个：
+生产环境 `GET /v1/models` 当前返回五个：
 
 | 模型 | 执行模型 | 路由 |
 |---|---|---|
@@ -109,10 +109,15 @@ stateDiagram-v2
 | `glm-5.3-jailbreak` | `glm-5.3` | OpenCode Go 池 |
 | `glm-5.3-flash-jailbreak` | `glm-5.3-flash` | OpenCode Go 池 |
 | `devin/swe-2-jailbreak` | `devin/swe-2` | Devin OAuth |
+| `devin/swe-2.1-jailbreak` | `devin/swe-2.1` | Devin OAuth |
+
+`devin/swe-2.1` 2026-11-25 上线，CPA 的 devin_models.json 还没收录，请求会报
+unknown provider。render 会拉官方清单、补上这条再写进 `cliproxy/catalog/devin_models.json`，
+用 `models.devin-catalog` 指给容器；官方清单收录后按 id 去重，不会重复追加。
 
 glm-5.3 系列上下文 202752，thinking 支持 `none`、`low`、`high`、`max` 四档，与池里
 其他 Go 模型一致。裸基座模型（`deepseek-v4.1-flash`、`glm-5.3`、`glm-5.3-flash`、
-`devin/swe-2`）不对客户端开放，要用哪个执行模型就选对应基座名的别名。
+`devin/swe-2`、`devin/swe-2.1`）不对客户端开放，要用哪个执行模型就选对应基座名的别名。
 
 破甲别名只在 `prompts/manifest.yaml` 配置了对应 profile 时出现。模型 ID 进入上游前
 会还原成基座模型，破甲插件只修改请求内容。长提示词放 system 走缓存，末尾只注入一条

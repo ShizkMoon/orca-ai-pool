@@ -94,13 +94,23 @@ GOAT_MODELS = [
 CLIENT_COMPAT_ALIASES = ()
 CLIENT_COMPAT_BASE_ALIAS = "deepseek-v4.1-flash"
 # 不再允许客户端直接调用的裸模型名；对应的破甲/nsfw 派生别名继续对外提供。
-HIDE_PLAIN_ALIASES = ("deepseek-v4.1-flash", "devin/swe-2", "glm-5.3", "glm-5.3-flash")
+HIDE_PLAIN_ALIASES = (
+    "deepseek-v4.1-flash",
+    "devin/swe-2",
+    "devin/swe-2.1",
+    "glm-5.3",
+    "glm-5.3-flash",
+)
 
 # Devin OAuth 通道对外暴露的模型（与 oauth.settings.devin 保持一致）
 DEVIN_MODEL_SETTINGS = [
     {"name": "devin/swe-2", "max-context-length": 262144},
+    {"name": "devin/swe-2.1", "max-context-length": 262144},
 ]
 DEVIN_MODELS = [item["name"] for item in DEVIN_MODEL_SETTINGS]
+
+# Devin 目录补录文件的容器内路径（render 写 cliproxy/catalog/，compose 挂到此处）
+DEVIN_CATALOG_PATH = "/CLIProxyAPI/catalog/devin_models.json"
 
 # Devin 凭据的模型目录有几十个上游模型，但号池只开放
 # swe-2 / swe-2-lightning / gemini-4-argon 三个（客户端按 devin/* 真实 ID 调用）。
