@@ -21,18 +21,19 @@ OFFICIAL_URLS = (
 
 FETCH_TIMEOUT = 8
 
-# clone_of：官方清单里同家族的条目，字段从它复制，只改 id 和 display_name。
-# overrides：上游给的规格，跟模板不同就写死在这里，别跟着 swe-2 漂。
+# id 一律用官方清单里的写法（swe-2-1，不是 swe-2.1）。
+# 官方还没有这个型号时按 clone_of 克隆；已有则原样覆盖 overrides 里的字段。
+# overrides 放产品口径，跟官方目录不一致时以这里为准。
 EXTRA_MODELS = (
     {
-        "id": "swe-2.1",
+        "id": "swe-2-1",
         "display_name": "SWE-2.1",
         "clone_of": "swe-2",
         "overrides": {
             "context_length": 262144,
             "max_completion_tokens": 64000,
-            # 上游只开 high 一档思考强度（官方目录写的是五档，以产品口径为准）
-            "thinking": {"levels": ["high"]},
+            # 只开 xhigh 一档思考强度（官方目录写 low/medium/high/xhigh/max 五档）
+            "thinking": {"levels": ["xhigh"]},
         },
     },
 )
@@ -55,27 +56,31 @@ def load_official():
 
 
 def merge_extras(payload):
-    """把 EXTRA_MODELS 补进 payload["devin"]，返回 (已补 id 列表, 跳过原因列表)。"""
+    """补录缺失型号、覆盖已有型号字段。返回 (动作说明列表, 跳过原因列表)。"""
     models = payload["devin"]
     index = {str(item.get("id", "")).lower(): item for item in models}
-    added = []
+    notes = []
     skipped = []
     for spec in EXTRA_MODELS:
         model_id = spec["id"]
-        if model_id.lower() in index:
-            continue
-        template = index.get(spec["clone_of"].lower())
-        if template is None:
-            skipped.append(f"{model_id}（缺模板 {spec['clone_of']}）")
-            continue
-        entry = copy.deepcopy(template)
-        entry["id"] = model_id
-        entry["display_name"] = spec["display_name"]
-        entry.update(copy.deepcopy(spec.get("overrides") or {}))
-        models.append(entry)
-        index[model_id.lower()] = entry
-        added.append(model_id)
-    return added, skipped
+        entry = index.get(model_id.lower())
+        if entry is None:
+            template = index.get(spec["clone_of"].lower())
+            if template is None:
+                skipped.append(f"{model_id}（缺模板 {spec['clone_of']}）")
+                continue
+            entry = copy.deepcopy(template)
+            entry["id"] = model_id
+            entry["display_name"] = spec["display_name"]
+            models.append(entry)
+            index[model_id.lower()] = entry
+            notes.append(f"新增 {model_id}")
+        else:
+            notes.append(f"覆盖 {model_id}")
+        overrides = spec.get("overrides") or {}
+        if overrides:
+            entry.update(copy.deepcopy(overrides))
+    return notes, skipped
 
 
 def _read_cached(path):
@@ -88,7 +93,7 @@ def _read_cached(path):
 
 
 def build(path):
-    """生成补录目录。返回 (payload, added, source, warning)；拿不到数据时 payload 为 None。"""
+    """生成补录目录。返回 (payload, notes, source, warning)；拿不到数据时 payload 为 None。"""
     path = Path(path)
     try:
         payload, source = load_official()
@@ -98,6 +103,6 @@ def build(path):
             return None, [], "", f"官方 Devin 目录拉取失败且无本地缓存：{exc}"
         return cached, [], "cache", f"官方 Devin 目录拉取失败，沿用 {path.name}：{exc}"
 
-    added, skipped = merge_extras(payload)
+    notes, skipped = merge_extras(payload)
     warning = "补录跳过：" + "、".join(skipped) if skipped else ""
-    return payload, added, source, warning
+    return payload, notes, source, warning

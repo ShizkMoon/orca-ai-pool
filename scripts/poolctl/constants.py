@@ -97,7 +97,7 @@ CLIENT_COMPAT_BASE_ALIAS = "deepseek-v4.1-flash"
 HIDE_PLAIN_ALIASES = (
     "deepseek-v4.1-flash",
     "devin/swe-2",
-    "devin/swe-2.1",
+    "devin/swe-2-1",
     "glm-5.3",
     "glm-5.3-flash",
 )
@@ -105,7 +105,7 @@ HIDE_PLAIN_ALIASES = (
 # Devin OAuth 通道对外暴露的模型（与 oauth.settings.devin 保持一致）
 DEVIN_MODEL_SETTINGS = [
     {"name": "devin/swe-2", "max-context-length": 262144},
-    {"name": "devin/swe-2.1", "max-context-length": 262144},
+    {"name": "devin/swe-2-1", "max-context-length": 262144},
 ]
 DEVIN_MODELS = [item["name"] for item in DEVIN_MODEL_SETTINGS]
 
@@ -122,7 +122,13 @@ DEVIN_EXCLUDED_MODELS = [
     "devin/deepseek-*",
     "devin/gemini-3-*",
     "devin/gemini-4-*",
-    "devin/swe-2-*",
+    # swe-2 家族只开 swe-2 与 swe-2-1：通配 "swe-2-*" 会把 swe-2-1 一起排掉，
+    # 所以变体按 id 单列；上游新增变体时往这里补一条。
+    "devin/swe-2-flash",
+    "devin/swe-2-lightning",
+    "devin/swe-2-flash-lightning",
+    "devin/swe-2-highsonnet",
+    "devin/swe-2-1-lightning",
     "devin/glm-*",
     "devin/gpt-*",
     "devin/grok-*",

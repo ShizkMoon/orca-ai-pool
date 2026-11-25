@@ -71,7 +71,7 @@ profiles:
     content_domain: "jailbreak"
     models:
       - "devin/swe-2"
-      - "devin/swe-2.1"
+      - "devin/swe-2-1"
     source_file: "local/devin-swe-2-impersonal.md"
     file: "local/devin-swe-2-impersonal.md"
     position: "system"

@@ -470,12 +470,12 @@ def plan(root):
     words = _sensitive_words(devin_pool)
     # Devin 目录补录：registry 只认 catalog 里的模型，官方清单没收录的型号（swe-2.1）
     # 必须自己补，否则请求被挡成 unknown provider。
-    catalog_payload, catalog_added, catalog_source, catalog_warning = build_devin_catalog(
+    catalog_payload, catalog_notes, catalog_source, catalog_warning = build_devin_catalog(
         root / "cliproxy" / "catalog" / "devin_models.json"
     )
     devin_catalog = {
         "payload": catalog_payload,
-        "added": catalog_added,
+        "notes": catalog_notes,
         "source": catalog_source,
         "warning": catalog_warning,
     }
@@ -595,11 +595,11 @@ def apply(render_plan):
         catalog_path = root / "cliproxy" / "catalog" / "devin_models.json"
         catalog_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_json(catalog_path, catalog_info["payload"])
-        added_label = "、".join(catalog_info["added"]) or "无"
+        notes_label = "、".join(catalog_info["notes"]) or "无"
         _ok(
             f"已生成 {catalog_path.relative_to(root)}"
             f"（Devin 目录 {len(catalog_info['payload']['devin'])} 个模型，"
-            f"补录 {added_label}，源 {catalog_info['source']}）"
+            f"{notes_label}，源 {catalog_info['source']}）"
         )
     if jailbreak:
         _ok(
