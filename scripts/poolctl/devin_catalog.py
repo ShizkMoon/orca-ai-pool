@@ -22,8 +22,19 @@ OFFICIAL_URLS = (
 FETCH_TIMEOUT = 8
 
 # clone_of：官方清单里同家族的条目，字段从它复制，只改 id 和 display_name。
+# overrides：上游给的规格，跟模板不同就写死在这里，别跟着 swe-2 漂。
 EXTRA_MODELS = (
-    {"id": "swe-2.1", "display_name": "SWE-2.1", "clone_of": "swe-2"},
+    {
+        "id": "swe-2.1",
+        "display_name": "SWE-2.1",
+        "clone_of": "swe-2",
+        "overrides": {
+            "context_length": 262144,
+            "max_completion_tokens": 64000,
+            # 上游只开 high 一档思考强度（官方目录写的是五档，以产品口径为准）
+            "thinking": {"levels": ["high"]},
+        },
+    },
 )
 
 
@@ -60,6 +71,7 @@ def merge_extras(payload):
         entry = copy.deepcopy(template)
         entry["id"] = model_id
         entry["display_name"] = spec["display_name"]
+        entry.update(copy.deepcopy(spec.get("overrides") or {}))
         models.append(entry)
         index[model_id.lower()] = entry
         added.append(model_id)
